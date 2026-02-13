@@ -58,9 +58,6 @@ if [ $? -eq 0 ]; then
     echo "- Plugin: /usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/"
     echo "- Playlists: /etc/enigma2/ipstreamer/"
     echo ""
-    echo "🔄 RESTARTING ENIGMA2 in 3s..."
-    sleep 3
-    killall -9 enigma2
 else
     echo "❌ Installation FAILED!"
     rm -rf "$tmp_dir"

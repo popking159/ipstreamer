@@ -1,0 +1,400 @@
+{
+    "playlist": [
+        {
+            "channel": "Anis FM1 NEW",
+            "url": "http://anisfm.pp.ua/1"
+        },
+        {
+            "channel": "Anis FM2 NEW",
+            "url": "http://anisfm.pp.ua/2"
+        },
+        {
+            "channel": "Anis FM3 NEW",
+            "url": "http://anisfm.pp.ua/3"
+        },
+        {
+            "channel": "Anis FM4 NEW",
+            "url": "http://anisfm.pp.ua/4"
+        },
+        {
+            "channel": "Anis FM5 NEW",
+            "url": "http://anisfm.pp.ua/5"
+        },
+        {
+            "channel": "Anis FM",
+            "url": "http://anisfm.ddns.net"
+        },
+        {
+            "channel": "Anis FM",
+            "url": "http://anisfm.xyz/1"
+        },
+        {
+            "channel": "Anis FM low",
+            "url": "http://anisfmlow.ddns.net"
+        },
+        {
+            "channel": "Anis FM low2",
+            "url": "http://anisfm.xyz/1L"
+        },
+        {
+            "channel": "Anis FM2",
+            "url": "http://anisfm2.ddns.net"
+        },
+        {
+            "channel": "Anis FM2",
+            "url": "http://anisfm.xyz/2"
+        },
+        {
+            "channel": "Anis FM2 low",
+            "url": "http://anisfm2low.ddns.net"
+        },
+        {
+            "channel": "Anis FM2 low2",
+            "url": "http://anisfm.xyz/2L"
+        },
+        {
+            "channel": "Anis FM3",
+            "url": "http://anisfm3.ddns.net"
+        },
+        {
+            "channel": "Anis FM3",
+            "url": "http://anisfm.xyz/3"
+        },
+        {
+            "channel": "Anis FM3 low",
+            "url": "http://anisfm3low.ddns.net"
+        },
+        {
+            "channel": "Anis FM3 low2",
+            "url": "http://anisfm.xyz/3L"
+        },
+        {
+            "channel": "Anis FM4",
+            "url": "http://anisfm4.ddns.net"
+        },
+        {
+            "channel": "Anis FM4",
+            "url": "http://anisfm.xyz/4"
+        },
+        {
+            "channel": "Anis FM4 low",
+            "url": "http://anisfm4low.ddns.net"
+        },
+        {
+            "channel": "Anis FM4 low2",
+            "url": "http://anisfm.xyz/4L"
+        },
+        {
+            "channel": "\u0635\u0648\u062a\u064a\u0629 \u0627\u0644\u0645\u0639\u0644\u0642 \u0627\u0644\u0643\u0627\u0628\u062a\u0646 \u0641\u064a\u0635\u0644 \u0627\u0644\u0634\u0627\u0647\u0631",
+            "url": "http://82.145.63.6:4289/stream"
+        },
+        {
+            "channel": "\u0635\u0648\u062a\u064a\u0629 \u0627\u0644\u0645\u062d\u0644\u0644 \u0627\u0644\u0623\u062e \u0623\u062d\u0645\u062f \u064a\u062d\u064a\u0649",
+            "url": "http://82.145.63.6:4776/yahia"
+        },
+        {
+            "channel": "Om Kolthom",
+            "url": "https://stream.zeno.fm/puv30d6l1bjtv"
+        },
+        {
+            "channel": "Fayrouz",
+            "url": "http://stream.zeno.fm/c0akqv6cz4zuv"
+        },
+        {
+            "channel": "Abd El-haleem Hafiz",
+            "url": "https://stream.zeno.fm/8a4eqkd0pnhvv"
+        },
+        {
+            "channel": "Fareed Alatrash",
+            "url": "https://stream.zeno.fm/z6u6zgwy868uv"
+        },
+        {
+            "channel": "Mohammed Fawzy",
+            "url": "https://stream.zeno.fm/3zh571nffv8uv"
+        },
+        {
+            "channel": "Sabah",
+            "url": "https://stream.zeno.fm/3p1ec6shguhvv"
+        },
+        {
+            "channel": "Nagat",
+            "url": "https://stream.zeno.fm/qtp67bc3f2zuv"
+        },
+        {
+            "channel": "Warda",
+            "url": "https://stream.zeno.fm/5277mqf2sxhvv"
+        },
+        {
+            "channel": "Layla Morad",
+            "url": "https://stream.zeno.fm/pq7r42662k8uv"
+        },
+        {
+            "channel": "Amr Diab",
+            "url": "https://stream.zeno.fm/xa4yhh4k838uv"
+        },
+        {
+            "channel": "Elissa",
+            "url": "https://stream.zeno.fm/v7n499m8ckhvv"
+        },
+        {
+            "channel": "Mohammed Mohy",
+            "url": "https://stream.zeno.fm/gql4tcwrrxgtv"
+        },
+        {
+            "channel": "Nogoom FM",
+            "url": "https://audio.nrpstream.com/listen/nogoumfm/radio.mp3"
+        },
+        {
+            "channel": "Mega FM",
+            "url": "http://nebula.shoutca.st:8211/stream"
+        },
+        {
+            "channel": "Radio 9090",
+            "url": "http://9090streaming.mobtada.com/9090FMEGYPT"
+        },
+        {
+            "channel": "Nile FM",
+            "url": "https://audio.nrpstream.com/listen/nile_fm/radio.mp3"
+        },
+        {
+            "channel": "Nagham FM",
+            "url": "https://ahmsamir.radioca.st/stream"
+        },
+        {
+            "channel": "Radio HITS",
+            "url": "http://radiohits882.radioca.st:8957/stream/;"
+        },
+        {
+            "channel": "Shaaby FM",
+            "url": "http://radio95.radioca.st:9010/stream"
+        },
+        {
+            "channel": "On Sport FM",
+            "url": "http://carina.streamerr.co:8108/stream"
+        },
+        {
+            "channel": "MAHATET MASR",
+            "url": "https://s3.radio.co/s9cb11828c/listen"
+        },
+        {
+            "channel": "El Gouna Radio",
+            "url": "http://82.201.132.237:8000/;stream.mp3"
+        },
+        {
+            "channel": "Mishary Rashid Alafasy",
+            "url": "https://qurango.net/radio/mishary_alafasi"
+        },
+        {
+            "channel": "Maher Al-Mu'aiqly",
+            "url": "https://backup.qurango.net/radio/maher"
+        },
+        {
+            "channel": "Muhammad Ayyub",
+            "url": "https://qurango.net/radio/mohammed_ayyub"
+        },
+        {
+            "channel": "best SPORTS 1",
+            "url": "http://radio.best-audio.org/shabanAudio1/mpegts"
+        },
+        {
+            "channel": "best SPORTS 2",
+            "url": "http://radio.best-audio.org/shabanAudio2/mpegts"
+        },
+        {
+            "channel": "best SPORTS 3",
+            "url": "http://radio.best-audio.org/shabanAudio3/mpegts"
+        },
+        {
+            "channel": "best SPORTS 4",
+            "url": "http://radio.best-audio.org/shabanAudio4/mpegts"
+        },
+        {
+            "channel": "best SPORTS 5",
+            "url": "http://radio.best-audio.org/shabanAudio5/mpegts"
+        },
+        {
+            "channel": "best SPORTS 6",
+            "url": "http://radio.best-audio.org/shabanAudio6/mpegts"
+        },
+        {
+            "channel": "best SPORTS 7",
+            "url": "http://radio.best-audio.org/shabanAudio7/mpegts"
+        },
+        {
+            "channel": "best SPORTS 8",
+            "url": "http://radio.best-audio.org/shabanAudio8/mpegts"
+        },
+        {
+            "channel": "best SPORTS 9",
+            "url": "http://radio.best-audio.org/shabanAudio9/mpegts"
+        },
+        {
+            "channel": "best SPORTS _prem1",
+            "url": "http://radio.best-audio.org/ADPrem1/mpegts"
+        },
+        {
+            "channel": "best SPORTS _prem2",
+            "url": "http://radio.best-audio.org/ADPrem2/mpegts"
+        },
+        {
+            "channel": "best xtra 1",
+            "url": "https://radio.best-audio.org/Xtra1/mpegts"
+        },
+        {
+            "channel": "best xtra 2",
+            "url": "https://radio.best-audio.org/Xtra2/mpegts"
+        },
+        {
+            "channel": "best xtra 3",
+            "url": "https://radio.best-audio.org/Xtra3/mpegts"
+        },
+        {
+            "channel": "best xtra 4",
+            "url": "https://radio.best-audio.org/Xtra4/mpegts"
+        },
+        {
+            "channel": "best xtra 5",
+            "url": "https://radio.best-audio.org/Xtra5/mpegts"
+        },
+        {
+            "channel": "best xtra 6",
+            "url": "https://radio.best-audio.org/Xtra6/mpegts"
+        },
+        {
+            "channel": "best alkass 5",
+            "url": "http://radio.best-audio.org/shabanAlkass5/mpegts"
+        },
+        {
+            "channel": "best alkass 6",
+            "url": "http://radio.best-audio.org/shabanAlkass6/mpegts"
+        },
+        {
+            "channel": "best alkass 7",
+            "url": "http://radio.best-audio.org/shabanAlkass7/mpegts"
+        },
+        {
+            "channel": "best alkass 8",
+            "url": "http://radio.best-audio.org/shabanAlkass8/mpegts"
+        },
+        {
+            "channel": "audio A SPORTS 1",
+            "url": "http://anisfm.ddns.net"
+        },
+        {
+            "channel": "audio A SPORTS 2",
+            "url": "http://anisfm2.ddns.net"
+        },
+        {
+            "channel": "audio A SPORTS 3",
+            "url": "http://anisfm3.ddns.net"
+        },
+        {
+            "channel": "audio A SPORTS 4",
+            "url": "http://anisfm4.ddns.net"
+        },
+        {
+            "channel": "audio A SPORTS 5",
+            "url": "http://anisfm5.ddns.net"
+        },
+        {
+            "channel": "audio B SPORTS 1",
+            "url": "http://anisfm.pp.ua/1"
+        },
+        {
+            "channel": "audio B SPORTS 2",
+            "url": "http://anisfm.pp.ua/2"
+        },
+        {
+            "channel": "audio B SPORTS 3",
+            "url": "http://anisfm.pp.ua/3"
+        },
+        {
+            "channel": "audio B SPORTS 4",
+            "url": "http://anisfm.pp.ua/4"
+        },
+        {
+            "channel": "audio B SPORTS 5",
+            "url": "http://anisfm.pp.ua/5"
+        },
+        {
+            "channel": "Jordan1",
+            "url": "http://fm.anisfm.dpdns.org/1"
+        },
+        {
+            "channel": "Jordan2",
+            "url": "http://fm.anisfm.dpdns.org/2"
+        },
+        {
+            "channel": "Jordan3",
+            "url": "http://fm.anisfm.dpdns.org/3"
+        },
+        {
+            "channel": "Jordan4",
+            "url": "http://fm.anisfm.dpdns.org/4"
+        },
+        {
+            "channel": "Jordan5",
+            "url": "http://fm.anisfm.dpdns.org/5"
+        },
+        {
+            "channel": "low A SPORTS 1",
+            "url": "http://anisfmlow.ddns.net"
+        },
+        {
+            "channel": "low A SPORTS 2",
+            "url": "http://anisfm2low.ddns.net"
+        },
+        {
+            "channel": "low A SPORTS 3",
+            "url": "http://anisfm3low.ddns.net"
+        },
+        {
+            "channel": "low A SPORTS 4",
+            "url": "http://anisfm4low.ddns.net"
+        },
+        {
+            "channel": "low A SPORTS 5",
+            "url": "http://anisfm5low.ddns.net"
+        },
+        {
+            "channel": "low B SPORTS 1",
+            "url": "http://anisfm.pp.ua/1L"
+        },
+        {
+            "channel": "low B SPORTS 2",
+            "url": "http://anisfm.pp.ua/2L"
+        },
+        {
+            "channel": "low B SPORTS 3",
+            "url": "http://anisfm.pp.ua/3L"
+        },
+        {
+            "channel": "low B SPORTS 4",
+            "url": "http://anisfm.pp.ua/4L"
+        },
+        {
+            "channel": "low B SPORTS 5",
+            "url": "http://anisfm.pp.ua/5L"
+        },
+        {
+            "channel": "abusaif1",
+            "url": "http://radio.abusaif.work/abu-saif-sat-4K-1/mpegts"
+        },
+        {
+            "channel": "abusaif2",
+            "url": "http://radio.abusaif.work/abu-saif-sat-4K-2/mpegts"
+        },
+        {
+            "channel": "Anis FR MAX 1",
+            "url": "http://anisfm.pp.ua/MxFR"
+        },
+        {
+            "channel": "Anis AR MAX 1",
+            "url": "http://anisfm.pp.ua/Mx1"
+        },
+        {
+            "channel": "Anis AR MAX 2",
+            "url": "http://anisfm.pp.ua/Mx2"
+        }
+    ]
+}

@@ -1,0 +1,4534 @@
+# =====================================================
+#   IPStreamer V1.00   |   Developed by Ziko
+#                   |   Maintained by MNASR
+# =====================================================
+
+# Core Enigma2 components
+from enigma import (
+    eConsoleAppContainer, eTimer, getDesktop, eListboxPythonMultiContent,
+    gFont, iPlayableService, loadPNG, RT_HALIGN_LEFT, RT_VALIGN_CENTER, RT_WRAP
+)
+
+# Screens and UI components
+from Screens.Screen import Screen
+from Screens.MessageBox import MessageBox
+from Screens.ChoiceBox import ChoiceBox
+from Components.Label import Label
+from Components.ActionMap import ActionMap
+from Components.Button import Button
+from Components.MenuList import MenuList
+from Components.Pixmap import Pixmap, MovingPixmap
+from Components.ConfigList import ConfigListScreen
+from Components.MultiContent import MultiContentEntryText, MultiContentEntryPixmapAlphaTest
+
+# Config and plugin system
+from Plugins.Plugin import PluginDescriptor
+from Components.Sources.StaticText import StaticText
+from Components.config import (
+    config, configfile, NoSave, ConfigSelectionNumber, ConfigSelection,
+    ConfigYesNo, ConfigInteger, ConfigSubsection, ConfigText,
+    getConfigListEntry
+)
+from Components.ServiceEventTracker import ServiceEventTracker
+from Tools.Directories import fileExists, resolveFilename, SCOPE_PLUGINS
+
+# Utilities and keymaps
+from Tools.BoundFunction import boundFunction
+from GlobalActions import globalActionMap
+try:
+    from keymapparser import readKeymap
+except ImportError:
+    from Components.ActionMap import loadKeymap as readKeymap
+
+# Standard library
+import json
+import os
+import re
+import signal
+import subprocess
+import urllib.error
+import urllib.request
+from collections import OrderedDict
+from datetime import datetime
+from sys import version_info
+
+# Optional imports
+try:
+    from enigma import eAlsaOutput
+    HAVE_EALSA = True
+except ImportError:
+    HAVE_EALSA = False
+
+try:
+    from PIL import Image
+except ImportError:
+    pass  # Handle gracefully if PIL not available
+
+# IPStreamer-specific imports (keep at bottom)
+from Plugins.Extensions.IPStreamer.Console2 import Console2
+from Plugins.Extensions.IPStreamer.ffmpeg_wrapper import build_ffmpeg_cmd
+from Plugins.Extensions.IPStreamer.gst_wrapper import build_gst_cmd
+from .skin import *
+
+
+PY3 = version_info[0] == 3
+
+config.plugins.IPStreamer = ConfigSubsection()
+config.plugins.IPStreamer.currentService = ConfigText()
+config.plugins.IPStreamer.player = ConfigSelection(default="gst1.0-ipstreamer", choices=[
+                ("gst1.0-ipstreamer", _("Gstreamer")),
+                ("ff-ipstreamer", _("FFmpeg")),
+            ])
+config.plugins.IPStreamer.sync = ConfigSelection(default="alsasink", choices=[
+                ("alsasink", _("alsasink")),
+                ("osssink", _("osssink")),
+                ("autoaudiosink", _("autoaudiosink")),
+            ])
+config.plugins.IPStreamer.forceMuteHack = ConfigYesNo(
+    default=False
+)
+config.plugins.IPStreamer.skin = ConfigSelection(default="orange", choices=[
+    ("orange", _("Orange")),
+    ("teal", _("Teal")),
+    ("lime", _("Lime")),
+    ("blue", _("Blue"))
+])
+config.plugins.IPStreamer.update = ConfigYesNo(default=True)
+config.plugins.IPStreamer.mainmenu = ConfigYesNo(default=False)
+config.plugins.IPStreamer.keepaudio = ConfigYesNo(default=False)
+config.plugins.IPStreamer.volLevel = ConfigSelectionNumber(default=40, stepwidth=1, min=1, max=100, wraparound=True)
+config.plugins.IPStreamer.audioDelay = ConfigInteger(default=0, limits=(-10, 60))  # -10s to 60s
+config.plugins.IPStreamer.tsDelay = ConfigInteger(default=5, limits=(0, 300))  # 0s to 300s (5 minutes)
+config.plugins.IPStreamer.delay = NoSave(ConfigInteger(default=5, limits=(0, 300)))
+config.plugins.IPStreamer.playlist = ConfigSelection(choices=[("1", _("Press OK"))], default="1")
+config.plugins.IPStreamer.running = ConfigYesNo(default=False)
+config.plugins.IPStreamer.lastidx = ConfigText()
+config.plugins.IPStreamer.lastplayed = NoSave(ConfigText())
+config.plugins.IPStreamer.lastAudioChannel = ConfigText(default="")  # Store last selected audio URL
+config.plugins.IPStreamer.equalizer = ConfigSelection(default="off", choices=[
+    ("off", _("Off")),
+    ("bass_boost", _("Bass Boost")),
+    ("treble_boost", _("Treble Boost")),
+    ("vocal", _("Vocal Enhance")),
+    ("rock", _("Rock")),
+    ("pop", _("Pop")),
+    ("classical", _("Classical")),
+    ("jazz", _("Jazz")),
+])
+# Picon path options - Simple List View
+PICON_PATH_SIMPLE_CHOICES = [
+    ("/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/", _("Plugin Default (Simple)")),
+    ("/usr/share/enigma2/picon/", _("System Picons (/usr/share/enigma2/picon/)")),
+    ("/media/usb/picons/simple/", _("USB - Simple")),
+    ("/media/hdd/picons/simple/", _("HDD - Simple")),
+    ("/etc/enigma2/picons/simple/", _("Enigma2 Config - Simple")),
+]
+
+# Picon path options - Grid View
+PICON_PATH_GRID_CHOICES = [
+    ("/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/", _("Plugin Default (Grid)")),
+    ("/usr/share/enigma2/picon/", _("System Picons (/usr/share/enigma2/picon/)")),
+    ("/media/usb/picons/grid/", _("USB - Grid")),
+    ("/media/hdd/picons/grid/", _("HDD - Grid")),
+    ("/etc/enigma2/picons/grid/", _("Enigma2 Config - Grid")),
+]
+
+# Replace ConfigText with ConfigSelection:
+config.plugins.IPStreamer.piconPathSimple = ConfigSelection(
+    default="/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/",
+    choices=PICON_PATH_SIMPLE_CHOICES
+)
+
+config.plugins.IPStreamer.piconPathGrid = ConfigSelection(
+    default="/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/",
+    choices=PICON_PATH_GRID_CHOICES
+)
+# Settings directory configuration
+config.plugins.IPStreamer.settingsPath = ConfigSelection(default="/etc/enigma2/ipstreamer/", choices=[
+    ("/etc/enigma2/ipstreamer/", _("/etc/enigma2/ipstreamer/")),
+    ("/media/hdd/ipstreamer/", _("/media/hdd/ipstreamer/")),
+    ("/media/usb/ipstreamer/", _("/media/usb/ipstreamer/")),
+    ("/media/mmc/ipstreamer/", _("/media/mmc/ipstreamer/")),
+    ("/media/sdcard/ipstreamer/", _("/media/sdcard/ipstreamer/")),
+    ("/media/sda1/ipstreamer/", _("/media/sda1/ipstreamer/")),
+    ("/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/settings/", _("Plugin Folder"))
+])
+# View mode configuration
+config.plugins.IPStreamer.viewMode = ConfigSelection(default="list", choices=[
+    ("list", _("List View")),
+    ("grid", _("Grid View"))
+])
+from Components.config import ConfigSelection
+
+# EPG offset: base is UTC+03:00 (value "0"),
+# negative values mean west of UTC+3, positive east
+config.plugins.IPStreamer.epgOffset = ConfigSelection(
+    default="0",
+    choices=[
+        ("-3", "UTC+00:00"),
+        ("-2", "UTC+01:00"),
+        ("-1", "UTC+02:00"),
+        ("0",  "UTC+03:00"),  # base
+        ("1",  "UTC+04:00"),
+        ("2",  "UTC+05:00"),
+        ("3",  "UTC+06:00"),
+    ]
+)
+config.plugins.IPStreamer.epgSource = ConfigSelection(
+    default="official",
+    choices=[
+        ("official", _("Official beIN API")),
+        ("local", _("Local XML file"))
+    ]
+)
+config.plugins.IPStreamer.orange_user = ConfigText(default="", fixed_size=False)
+config.plugins.IPStreamer.orange_pass = ConfigText(default="", fixed_size=False)
+config.plugins.IPStreamer.satfamily_user = ConfigText(default="", fixed_size=False)
+config.plugins.IPStreamer.satfamily_pass = ConfigText(default="", fixed_size=False)
+
+# After config definitions, add migration code:
+
+# Migrate old single piconPath to new separate paths
+if hasattr(config.plugins.IPStreamer, 'piconPath'):
+    # Old config exists, migrate it
+    old_path = config.plugins.IPStreamer.piconPath.value
+    
+    # Set both new paths to old path initially
+    if not config.plugins.IPStreamer.piconPathSimple.value or config.plugins.IPStreamer.piconPathSimple.value == "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/":
+        # Check if old path has a 'simple' subfolder
+        if os.path.exists(os.path.join(old_path, 'simple')):
+            config.plugins.IPStreamer.piconPathSimple.value = os.path.join(old_path, 'simple/')
+        else:
+            config.plugins.IPStreamer.piconPathSimple.value = old_path
+        config.plugins.IPStreamer.piconPathSimple.save()
+    
+    if not config.plugins.IPStreamer.piconPathGrid.value or config.plugins.IPStreamer.piconPathGrid.value == "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/":
+        # Check if old path has a 'grid' subfolder
+        if os.path.exists(os.path.join(old_path, 'grid')):
+            config.plugins.IPStreamer.piconPathGrid.value = os.path.join(old_path, 'grid/')
+        else:
+            config.plugins.IPStreamer.piconPathGrid.value = old_path
+        config.plugins.IPStreamer.piconPathGrid.save()
+    
+    cprint("[IPStreamer] Migrated old piconPath to separate simple/grid paths")
+
+def validateConfigValues():
+    """Ensure all config values are valid on startup"""
+    if config.plugins.IPStreamer.tsDelay.value is None:
+        config.plugins.IPStreamer.tsDelay.value = 5
+        config.plugins.IPStreamer.tsDelay.save()
+    
+    if config.plugins.IPStreamer.audioDelay.value is None:
+        config.plugins.IPStreamer.audioDelay.value = 0
+        config.plugins.IPStreamer.audioDelay.save()
+    
+    if config.plugins.IPStreamer.volLevel.value is None:
+        config.plugins.IPStreamer.volLevel.value = 50
+        config.plugins.IPStreamer.volLevel.save()
+
+# Call on plugin load
+validateConfigValues()
+
+REDC = '**'
+ENDC = '**'
+
+def cprint(text):
+    print(REDC + text + ENDC)
+
+
+def trace_error():
+    import sys
+    import traceback
+    try:
+        traceback.print_exc(file=sys.stdout)
+        traceback.print_exc(file=open('/tmp/IPStreamer.log', 'a'))
+    except:
+        pass
+
+def build_provider_url(provider, username, password):
+    """
+    Return a list of (url, format_tag) to try in order.
+    Supports both:
+      - token=<user>_<pass>
+      - token=<pass>
+      - (legacy) token=<user>
+    """
+    u = (username or "").strip()
+    p = (password or "").strip()
+
+    if not u or not p:
+        return []
+
+    # If user pasted full URL, use only that
+    if u.startswith("http://") or u.startswith("https://"):
+        return [(u, "direct")]
+
+    urls = []
+
+    if provider == "orange":
+        base = "http://goradio.top/tv/playlists"
+        # 1) token=user_pass
+        token_user_pass = "%s_%s" % (u, p)
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, token_user_pass), "user_pass"))
+        # 2) token=pass_only
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, p), "pass_only"))
+        # 3) token=user_only (legacy)
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, u), "user_only"))
+
+    elif provider == "satfamily":
+        base = "http://stereofm.live/tv/playlists"
+        # Example: http://stereofm.live/tv/playlists/adsxbamm?token=adsxbamm_TuzG9hAyZj&type=mpegts
+        token_user_pass = "%s_%s" % (u, p)
+        # 1) token=user_pass
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, token_user_pass), "user_pass"))
+        # 2) token=pass_only
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, p), "pass_only"))
+        # 3) token=user_only (if they ever used this)
+        urls.append(("%s/%s?token=%s&type=mpegts" % (base, u, u), "user_only"))
+
+    return urls
+
+def simpleDownloadM3U(url, timeout=10):
+    headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = resp.read()
+    except urllib.error.HTTPError as e:
+        raise Exception("HTTP error %s: %s" % (e.code, e.reason))
+    except urllib.error.URLError as e:
+        raise Exception("URL error: %s" % e.reason)
+    except Exception as e:
+        raise Exception("Network error: %s" % e)
+
+    if not data:
+        raise Exception("Empty response from server")
+
+    try:
+        text = data.decode("utf-8")
+    except Exception:
+        text = data.decode("latin-1", "ignore")
+    return text
+
+def getPlaylistDir():
+    """Get the configured playlist directory"""
+    path = config.plugins.IPStreamer.settingsPath.value
+    if not os.path.exists(path):
+        try:
+            os.makedirs(path)
+        except:
+            pass
+    return path
+
+def getPlaylistFiles():
+    """Get all playlist JSON files from the ipstreamer directory"""
+    import glob
+    
+    # Use configurable directory
+    playlist_dir = getPlaylistDir()
+    
+    # Create directory if it doesn't exist
+    if not os.path.exists(playlist_dir):
+        try:
+            os.makedirs(playlist_dir)
+        except:
+            pass
+    
+    playlist_files = glob.glob(playlist_dir + 'ipstreamer_*.json')
+    playlists = []
+    for filepath in sorted(playlist_files):
+        # Extract category name from filename: ipstreamer_sport.json -> Sport
+        filename = os.path.basename(filepath)
+        category = filename.replace('ipstreamer_', '').replace('.json', '')
+        category = category.capitalize()  # Sport, Quran, etc.
+        playlists.append({'name': category, 'file': filepath})
+    
+    return playlists
+
+def getPlaylist(category_file=None):
+    """Load playlist from specific file or default"""
+    if category_file is None:
+        # Use configurable path for default
+        category_file = os.path.join(config.plugins.IPStreamer.settingsPath.value, 'ipstreamer.json')
+    
+    if fileExists(category_file):
+        with open(category_file, 'r') as f:
+            try:
+                return json.loads(f.read())
+            except ValueError:
+                trace_error()
+    return None
+
+
+def getversioninfo():
+    """Read version from version file"""
+    import os
+    currversion = "1.0"
+    versionfile = "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/version"
+    
+    if os.path.exists(versionfile):
+        try:
+            with open(versionfile, 'r') as fp:
+                for line in fp.readlines():
+                    if 'version=' in line:
+                        currversion = line.split('=')[1].strip()
+                        break
+        except:
+            pass
+    
+    return currversion
+
+Ver = getversioninfo()
+
+def loadSimpleEPG():
+    """Load simple_epg.json from settingsPath"""
+    epg_path = os.path.join(config.plugins.IPStreamer.settingsPath.value, "simple_epg.json")
+    if not fileExists(epg_path):
+        return {"events": []}
+    try:
+        with open(epg_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        trace_error()
+        return {"events": []}
+
+def buildEPGIndex():
+    """Build channel -> events list from simple_epg.json"""
+    epg = loadSimpleEPG()
+    events_by_channel = {}
+    for ev in epg.get("events", []):
+        ch = ev.get("channel", "")
+        if not ch:
+            continue
+        events_by_channel.setdefault(ch, []).append(ev)
+    return events_by_channel
+
+def findEPGTitleForAudioName(audio_name, ch_events):
+    from datetime import datetime
+    now_str = datetime.now().strftime("%Y%m%d%H%M%S")
+
+    parts = audio_name.split()
+    if len(parts) < 2:
+        return ""
+
+    suffix = " ".join(parts[-2:]).upper()  # e.g. "SPORTS 9"
+
+    for ch_name, events in ch_events.items():
+        if ch_name.upper().endswith(suffix):
+            for ev in events:
+                if ev["start_full"] <= now_str <= ev["end_full"]:
+                    cprint("[IPStreamer] Grid EPG match: {} -> {}"
+                           .format(audio_name, ev["title"]))
+                    return ev.get("title", "")
+    return ""
+
+
+import re, os
+
+def extract_channel_type_and_number(clean_name):
+    """Extract type and number: 'orangesports1' → ('sports', '1'), 'xtra2' → ('xtra', '2')"""
+    patterns = [
+        (r'sports[_]?(\d+)', 'sports'),
+        (r'xtra[_]?(\d+)', 'xtra'),
+        (r'max[_]?(\d+)', 'max')
+    ]
+    
+    for pattern, type_name in patterns:
+        match = re.search(pattern, clean_name)
+        if match:
+            return type_name, match.group(1)
+    return None, None
+
+def getPiconPath(serviceName):
+    """SIMPLE LIST - Case-insensitive underscore → no-underscore → beIN fallback"""
+    serviceName = serviceName.strip()
+    picon_paths = [
+        config.plugins.IPStreamer.piconPathSimple.value,
+        '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/',
+        '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/',
+        '/usr/share/enigma2/picon/'
+    ]
+    
+    clean_name = serviceName.lower().replace(' ', '_').replace('+', 'plus')
+    clean_name = ''.join(c for c in clean_name if c.isalnum() or c == '_')
+    
+    print(f"[PICON] '{serviceName}' → lowercase: '{clean_name}.png'")
+    
+    # Case-insensitive check function
+    def file_exists_case_insensitive(path, filename):
+        """Check if filename exists ignoring case"""
+        dir_path = os.path.dirname(path)
+        filename_lower = filename.lower()
+        try:
+            for f in os.listdir(dir_path):
+                if f.lower() == filename_lower:
+                    return os.path.join(dir_path, f)  # Return actual filename
+        except:
+            pass
+        return None
+    
+    # 1. Try underscore version (orange_sports_1.png)
+    for path in picon_paths:
+        if path and os.path.exists(path):
+            picon_file = file_exists_case_insensitive(
+                os.path.join(path, clean_name + '.png'), 
+                clean_name + '.png'
+            )
+            if picon_file:
+                print(f"[PICON] ✓ UNDERSCORE (case-insens): {picon_file}")
+                return picon_file
+    
+    # 2. Try no-underscore version (orangesports1.png)
+    no_underscore_name = clean_name.replace('_', '')
+    print(f"[PICON] Trying no-underscore: '{no_underscore_name}.png'")
+    for path in picon_paths:
+        if path and os.path.exists(path):
+            picon_file = file_exists_case_insensitive(
+                os.path.join(path, no_underscore_name + '.png'),
+                no_underscore_name + '.png'
+            )
+            if picon_file:
+                print(f"[PICON] ✓ NO-UNDERSCORE (case-insens): {picon_file}")
+                return picon_file
+    
+    # 3. beIN fallbacks (unchanged)
+    type_name, number = extract_channel_type_and_number(clean_name)
+    print(f"[PICON] Type/Num: '{type_name}/{number}'")
+    
+    if type_name and number:
+        bein_fallbacks = {
+            'sports': f'beinsports{number}.png',
+            'xtra': f'beinxtra{number}.png',
+            'max': f'beinmax{number}.png'
+        }
+        fallback_name = bein_fallbacks.get(type_name)
+        if fallback_name:
+            print(f"[PICON] Trying beIN: '{fallback_name}'")
+            for path in picon_paths:
+                if path and os.path.exists(path):
+                    picon_file = file_exists_case_insensitive(
+                        os.path.join(path, fallback_name),
+                        fallback_name
+                    )
+                    if picon_file:
+                        print(f"[PICON] ✓ BEIN FALLBACK: {picon_file}")
+                        return picon_file
+    
+    print(f"[PICON] ❌ No picon found")
+    default_picon = '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/default_picon.png'
+    return default_picon if os.path.exists(default_picon) else None
+
+
+
+def getPiconPathGrid(serviceName):
+    """GRID VIEW - Case-insensitive underscore → no-underscore → beIN fallback"""
+    serviceName = serviceName.strip()
+    picon_paths = [
+        config.plugins.IPStreamer.piconPathGrid.value,
+        '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/',
+        '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/',
+        '/usr/share/enigma2/picon/'
+    ]
+    
+    clean_name = serviceName.lower().replace(' ', '_').replace('+', 'plus')
+    clean_name = ''.join(c for c in clean_name if c.isalnum() or c == '_')
+    
+    print(f"[PICON GRID] '{serviceName}' → lowercase: '{clean_name}.png'")
+    
+    # Case-insensitive check function
+    def file_exists_case_insensitive(path, filename):
+        """Check if filename exists ignoring case"""
+        dir_path = os.path.dirname(path)
+        filename_lower = filename.lower()
+        try:
+            for f in os.listdir(dir_path):
+                if f.lower() == filename_lower:
+                    return os.path.join(dir_path, f)  # Return actual filename
+        except:
+            pass
+        return None
+    
+    # 1. Try underscore version (orange_sports_1.png)
+    for path in picon_paths:
+        if path and os.path.exists(path):
+            picon_file = file_exists_case_insensitive(
+                os.path.join(path, clean_name + '.png'), 
+                clean_name + '.png'
+            )
+            if picon_file:
+                print(f"[PICON GRID] ✓ UNDERSCORE (case-insens): {picon_file}")
+                return picon_file
+    
+    # 2. Try no-underscore version (orangesports1.png)
+    no_underscore_name = clean_name.replace('_', '')
+    print(f"[PICON GRID] Trying no-underscore: '{no_underscore_name}.png'")
+    for path in picon_paths:
+        if path and os.path.exists(path):
+            picon_file = file_exists_case_insensitive(
+                os.path.join(path, no_underscore_name + '.png'),
+                no_underscore_name + '.png'
+            )
+            if picon_file:
+                print(f"[PICON GRID] ✓ NO-UNDERSCORE (case-insens): {picon_file}")
+                return picon_file
+    
+    # 3. beIN fallbacks
+    type_name, number = extract_channel_type_and_number(clean_name)
+    print(f"[PICON GRID] Type/Num: '{type_name}/{number}'")
+    
+    if type_name and number:
+        bein_fallbacks = {
+            'sports': f'beinsports{number}.png',
+            'xtra': f'beinxtra{number}.png',
+            'max': f'beinmax{number}.png'
+        }
+        fallback_name = bein_fallbacks.get(type_name)
+        if fallback_name:
+            print(f"[PICON GRID] Trying beIN: '{fallback_name}'")
+            for path in picon_paths:
+                if path and os.path.exists(path):
+                    picon_file = file_exists_case_insensitive(
+                        os.path.join(path, fallback_name),
+                        fallback_name
+                    )
+                    if picon_file:
+                        print(f"[PICON GRID] ✓ BEIN FALLBACK: {picon_file}")
+                        return picon_file
+    
+    # 4. Partial match
+    for path in picon_paths:
+        if path and os.path.exists(path):
+            try:
+                for filename in os.listdir(path):
+                    if clean_name in filename.lower() and filename.endswith('.png'):
+                        print(f"[PICON GRID] ✓ PARTIAL: {os.path.join(path, filename)}")
+                        return os.path.join(path, filename)
+            except:
+                pass
+    
+    print(f"[PICON GRID] ❌ No picon found")
+    default_picon = '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/default_grid_picon.png'
+    return default_picon if os.path.exists(default_picon) else None
+
+def getVideoDelayFile():
+    """Get the configured video delay file path"""
+    return os.path.join(config.plugins.IPStreamer.settingsPath.value, 'video_delay_channels.json')
+
+def loadVideoDelayData():
+    """Load video delay data from JSON file"""
+    videodelayfile = getVideoDelayFile()
+    settings_dir = config.plugins.IPStreamer.settingsPath.value
+    
+    if not os.path.exists(settings_dir):
+        try:
+            os.makedirs(settings_dir)
+        except:
+            pass
+    
+    if fileExists(videodelayfile):
+        try:
+            with open(videodelayfile, 'r') as f:
+                return json.load(f)
+        except:
+            trace_error()
+    return {}
+
+def saveVideoDelayData(data):
+    """Save video delay data to JSON file"""
+    videodelayfile = getVideoDelayFile()
+    settings_dir = config.plugins.IPStreamer.settingsPath.value
+    
+    try:
+        if not os.path.exists(settings_dir):
+            os.makedirs(settings_dir)
+        with open(videodelayfile, 'w') as f:
+            json.dump(data, f, indent=4)
+        return True
+    except:
+        trace_error()
+    return False
+
+def getVideoDelayForChannel(service_ref, fallback=None):
+    """Get saved video delay for a specific channel with fallback"""
+    if not service_ref:
+        return fallback if fallback is not None else 5  # Default to 5 seconds
+    
+    ref_str = service_ref.toString()
+    data = loadVideoDelayData()
+    
+    if ref_str in data:
+        delay_value = data[ref_str]
+        # Validate the value
+        if delay_value is not None and isinstance(delay_value, (int, float)):
+            cprint("[IPStreamer] Found saved video delay for channel: {} = {}".format(ref_str, delay_value))
+            return int(delay_value)
+    
+    # No saved delay for this channel, use fallback
+    if fallback is not None:
+        cprint("[IPStreamer] No saved delay for channel, using fallback: {}".format(fallback))
+        return fallback
+    
+    # Final fallback
+    return 5  # Default 5 seconds
+
+def saveVideoDelayForChannel(service_ref, delay_value):
+    """Save video delay for a specific channel"""
+    if not service_ref:
+        return False
+    
+    ref_str = service_ref.toString()
+    data = loadVideoDelayData()
+    data[ref_str] = delay_value
+    
+    if saveVideoDelayData(data):
+        cprint("[IPStreamer] Saved video delay for channel: {} = {}".format(ref_str, delay_value))
+        return True
+    
+    return False
+
+def getAudioBitrate(url):
+    """Get audio bitrate from stream URL using ffprobe"""
+    try:
+        # Use ffprobe to get audio bitrate
+        cmd = [
+            'ffprobe',
+            '-v', 'error',
+            '-select_streams', 'a:0',  # First audio stream
+            '-show_entries', 'stream=bit_rate',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            url
+        ]
+        
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            bitrate_bps = result.stdout.decode('utf-8').strip()
+            if bitrate_bps and bitrate_bps != 'N/A':
+                # Convert bps to kbps
+                bitrate_kbps = int(bitrate_bps) // 1000
+                return bitrate_kbps
+        
+        # Fallback: Try to get format bitrate if stream bitrate not available
+        cmd_format = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=bit_rate',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            url
+        ]
+        
+        result = subprocess.run(
+            cmd_format,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5
+        )
+        
+        if result.returncode == 0:
+            bitrate_bps = result.stdout.decode('utf-8').strip()
+            if bitrate_bps and bitrate_bps != 'N/A':
+                bitrate_kbps = int(bitrate_bps) // 1000
+                return bitrate_kbps
+        
+    except Exception as e:
+        cprint("[IPStreamer] Error getting bitrate: {}".format(str(e)))
+    
+    return None  # Unknown bitrate
+
+def getGridPositions(resolution="FHD"):
+    """Get grid positions for picons - 5 columns x 3 rows = 15 items"""
+    if resolution == "FHD":
+        # FHD: 1920x1080
+        positions = [
+            # Row 1
+            (100, 180), (420, 180), (740, 180), (1060, 180), (1380, 180),
+            # Row 2
+            (100, 440), (420, 440), (740, 440), (1060, 440), (1380, 440),
+            # Row 3
+            (100, 700), (420, 700), (740, 700), (1060, 700), (1380, 700)
+        ]
+    else:  # HD: 1280x720
+        positions = [
+            # Row 1 (y=80)
+            (30, 80), (245, 80), (460, 80), (675, 80), (890, 80),
+            # Row 2 (y=260)
+            (30, 260), (245, 260), (460, 260), (675, 260), (890, 260),
+            # Row 3 (y=440)
+            (30, 440), (245, 440), (460, 440), (675, 440), (890, 440)
+        ]
+    return positions
+
+def isMutable():
+    """
+    Return True if this box supports the /dev/dvb/adapter0/audio0 hack.
+    Combined with user option to avoid breaking unknown models.
+    """
+    if not config.plugins.IPStreamer.forceMuteHack.value:
+        return False
+    if fileExists("/dev/dvb/adapter0/audio0"):
+        cprint("[IPStreamer] Using DVB audio mute hack (audio0→audio10)")
+        return True
+    return False
+
+
+def getDesktopSize():
+    s = getDesktop(0).size()
+    return (s.width(), s.height())
+
+
+def isHD():
+    """Check if HD or FHD resolution"""
+    desktopSize = getDesktopSize()
+    return desktopSize[0] == 1280
+
+def getPiconBasePath(view_mode="simple"):
+    """Get the actual picon base path based on selection"""
+    if view_mode == "simple":
+        selection = config.plugins.IPStreamer.piconPathSimpleSelect.value
+        
+        if selection == "plugin_default":
+            return "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/"
+        elif selection == "system":
+            return "/usr/share/enigma2/picon/"
+        elif selection == "usb":
+            return "/media/usb/picons/simple/"
+        elif selection == "hdd":
+            return "/media/hdd/picons/simple/"
+        elif selection == "custom":
+            return config.plugins.IPStreamer.piconPathSimpleCustom.value
+        else:
+            return "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/simple/"
+    
+    else:  # grid
+        selection = config.plugins.IPStreamer.piconPathGridSelect.value
+        
+        if selection == "plugin_default":
+            return "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/"
+        elif selection == "system":
+            return "/usr/share/enigma2/picon/"
+        elif selection == "usb":
+            return "/media/usb/picons/grid/"
+        elif selection == "hdd":
+            return "/media/hdd/picons/grid/"
+        elif selection == "custom":
+            return config.plugins.IPStreamer.piconPathGridCustom.value
+        else:
+            return "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/picons/grid/"
+
+class IPStreamerPiconConverter(Screen):
+    """Convert picons between simple and grid sizes"""
+    
+    def __init__(self, session, conversion_type):
+        Screen.__init__(self, session)
+        self.session = session
+        self.conversion_type = conversion_type
+        
+        # Simple skin for processing screen
+        self.skin = """
+            <screen name="IPStreamerPiconConverter" position="center,center" size="600,400" title="Converting Picons...">
+                <widget name="status" position="20,20" size="560,360" font="Regular;22" halign="center" valign="center" transparent="1"/>
+            </screen>
+        """
+        
+        self["status"] = Label(_("Converting picons, please wait..."))
+        
+        self["actions"] = ActionMap(["OkCancelActions"],
+        {
+            "ok": self.close,
+            "cancel": self.close,
+        }, -2)
+        
+        # Determine source and destination
+        if conversion_type == "simple_to_grid":
+            self.source_path = config.plugins.IPStreamer.piconPathSimple.value
+            self.dest_path = config.plugins.IPStreamer.piconPathGrid.value
+            self.source_size = (110, 56)
+            self.dest_size = (200, 120) if not isHD() else (190, 130)
+            self.title_text = "Converting Simple → Grid Picons"
+        else:  # grid_to_simple
+            self.source_path = config.plugins.IPStreamer.piconPathGrid.value
+            self.dest_path = config.plugins.IPStreamer.piconPathSimple.value
+            self.source_size = (200, 120) if not isHD() else (190, 130)
+            self.dest_size = (110, 56)
+            self.title_text = "Converting Grid → Simple Picons"
+        
+        # Start conversion after screen is shown
+        self.onLayoutFinish.append(self.startConversion)
+    
+    def startConversion(self):
+        """Start the conversion process"""
+        # Check PIL first
+        try:
+            from PIL import Image
+        except ImportError:
+            self["status"].setText(
+                _("ERROR: Python PIL/Pillow not found!\n\n"
+                  "Install with:\n"
+                  "opkg update && opkg install python3-pillow")
+            )
+            return
+        
+        # Validate paths
+        if self.source_path == self.dest_path:
+            self["status"].setText(
+                _("ERROR: Source and destination are the same!\n\n"
+                  "Configure different paths in settings.")
+            )
+            return
+        
+        if not os.path.exists(self.source_path):
+            self["status"].setText(
+                _("ERROR: Source directory not found:\n{}").format(self.source_path)
+            )
+            return
+        
+        # Get picon files
+        try:
+            picon_files = [f for f in os.listdir(self.source_path) if f.lower().endswith('.png')]
+        except Exception as e:
+            self["status"].setText(
+                _("ERROR: Cannot read source directory:\n{}\n\n{}").format(self.source_path, str(e))
+            )
+            return
+        
+        if len(picon_files) == 0:
+            self["status"].setText(
+                _("No PNG picons found in:\n{}").format(self.source_path)
+            )
+            return
+        
+        # Create destination directory
+        if not os.path.exists(self.dest_path):
+            try:
+                os.makedirs(self.dest_path)
+            except Exception as e:
+                self["status"].setText(
+                    _("ERROR: Cannot create destination:\n{}\n\n{}").format(self.dest_path, str(e))
+                )
+                return
+        
+        # Update status
+        self["status"].setText(
+            _("Converting {} picons...\n\n"
+              "From: {}x{}\n"
+              "To: {}x{}\n\n"
+              "Please wait...").format(
+                len(picon_files),
+                self.source_size[0], self.source_size[1],
+                self.dest_size[0], self.dest_size[1]
+            )
+        )
+        
+        # Do conversion
+        self.convertPicons(picon_files)
+    
+    def convertPicons(self, picon_files):
+        """Convert the picons while preserving transparency"""
+        from PIL import Image
+        
+        success_count = 0
+        fail_count = 0
+        
+        for picon_file in picon_files:
+            source_file = os.path.join(self.source_path, picon_file)
+            dest_file = os.path.join(self.dest_path, picon_file)
+            
+            try:
+                # Open image
+                img = Image.open(source_file)
+                
+                # PRESERVE ALPHA CHANNEL - Convert mode if needed but keep transparency
+                if img.mode == 'P':
+                    # Palette mode - convert to RGBA to preserve transparency
+                    img = img.convert('RGBA')
+                elif img.mode == 'LA':
+                    # Grayscale with alpha - convert to RGBA
+                    img = img.convert('RGBA')
+                elif img.mode not in ('RGBA', 'RGB'):
+                    # Other modes - convert to RGBA to be safe
+                    img = img.convert('RGBA')
+                # If already RGBA or RGB, keep as is
+                
+                # Resize with high quality resampling
+                # LANCZOS preserves quality and transparency
+                img_resized = img.resize(self.dest_size, Image.LANCZOS)
+                
+                # Save with transparency preserved
+                if img_resized.mode == 'RGBA':
+                    # Save as RGBA PNG with transparency
+                    img_resized.save(dest_file, 'PNG', optimize=True)
+                else:
+                    # Save as RGB PNG
+                    img_resized.save(dest_file, 'PNG', optimize=True)
+                
+                success_count += 1
+                
+            except Exception as e:
+                cprint("[IPStreamer] Error converting {}: {}".format(picon_file, str(e)))
+                fail_count += 1
+        
+        # Show results
+        if self.conversion_type == "simple_to_grid":
+            conversion_text = "Simple → Grid\n({}x{} → {}x{})".format(
+                self.source_size[0], self.source_size[1],
+                self.dest_size[0], self.dest_size[1]
+            )
+        else:
+            conversion_text = "Grid → Simple\n({}x{} → {}x{})".format(
+                self.source_size[0], self.source_size[1],
+                self.dest_size[0], self.dest_size[1]
+            )
+        
+        result_text = _(
+            "Conversion Complete!\n\n"
+            "{}\n\n"
+            "✓ Success: {}\n"
+            "✗ Failed: {}\n"
+            "Total: {}\n\n"
+            "Press OK to close"
+        ).format(
+            conversion_text,
+            success_count,
+            fail_count,
+            len(picon_files)
+        )
+        
+        self["status"].setText(result_text)
+
+class IPStreamerSetup(Screen, ConfigListScreen):
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        self.currentSkin = config.plugins.IPStreamer.skin.value
+        
+        # Load appropriate skin
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerSetup_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerSetup_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerSetup_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerSetup_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerSetup_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerSetup_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerSetup_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerSetup_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerSetup_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerSetup_ORANGE_FHD
+        
+        self.skinName = "IPStreamerSetup"
+        self.onChangedEntry = []
+        self.list = []
+        ConfigListScreen.__init__(self, self.list, session=session, on_change=self.changedEntry)
+        
+        # FIXED: Use separate ActionMaps
+        self["key_red"] = Button(_("Cancel"))
+        self["key_green"] = Button(_("Save"))
+        self["key_yellow"] = Button(_("Credentials"))
+        self["key_blue"] = Button(_("Convert Picons"))
+
+        self["actions"] = ActionMap(
+            ["SetupActions", "ColorActions"],
+            {
+                "cancel": self.keyCancel,
+                "red": self.keyCancel,
+                "green": self.apply,
+                "yellow": self.openCredentialsMenu,
+                "blue": self.openPiconConverter,
+            },
+            -2)
+        
+        self.configChanged = False
+        self.createSetup()
+
+    def openCredentialsMenu(self):
+        choices = [
+            (_("Backup credentials"), "backup"),
+            (_("Restore credentials"), "restore"),
+        ]
+        self.session.openWithCallback(
+            self.credentialsAction,
+            ChoiceBox,
+            title=_("Credentials actions"),
+            list=choices
+        )
+
+    def getCredentialsPath(self):
+        base = config.plugins.IPStreamer.settingsPath.value
+        if not os.path.exists(base):
+            try:
+                os.makedirs(base)
+            except Exception:
+                pass
+        return os.path.join(base, "credentials_ipstreamer.json")
+
+    def credentialsAction(self, choice):
+        if not choice:
+            return
+        action = choice[1]
+        if action == "backup":
+            self.backupCredentials()
+        elif action == "restore":
+            self.restoreCredentials()
+
+    def backupCredentials(self):
+        path = self.getCredentialsPath()
+        data = {
+            "orange_user": config.plugins.IPStreamer.orange_user.value,
+            "orange_pass": config.plugins.IPStreamer.orange_pass.value,
+            "satfamily_user": config.plugins.IPStreamer.satfamily_user.value,
+            "satfamily_pass": config.plugins.IPStreamer.satfamily_pass.value,
+        }
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=4)
+            self.session.open(
+                MessageBox,
+                _("Credentials saved successfully.\nFile: %s") % path,
+                MessageBox.TYPE_INFO, timeout=5
+            )
+        except Exception as e:
+            self.session.open(
+                MessageBox,
+                _("Error saving credentials:\n%s") % str(e),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+
+    def restoreCredentials(self):
+        path = self.getCredentialsPath()
+        if not os.path.exists(path):
+            self.session.open(
+                MessageBox,
+                _("No saved credentials found.\nFile: %s") % path,
+                MessageBox.TYPE_INFO, timeout=5
+            )
+            return
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            config.plugins.IPStreamer.orange_user.value = data.get("orange_user", "")
+            config.plugins.IPStreamer.orange_pass.value = data.get("orange_pass", "")
+            config.plugins.IPStreamer.satfamily_user.value = data.get("satfamily_user", "")
+            config.plugins.IPStreamer.satfamily_pass.value = data.get("satfamily_pass", "")
+
+            # Refresh config list and mark as changed
+            self["config"].invalidateCurrent()
+            self.createSetup()
+
+            self.session.open(
+                MessageBox,
+                _("Credentials restored.\nRemember to press GREEN (Save)."),
+                MessageBox.TYPE_INFO, timeout=6
+            )
+        except Exception as e:
+            self.session.open(
+                MessageBox,
+                _("Error restoring credentials:\n%s") % str(e),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+
+    def openPiconConverter(self):
+        """Open picon converter choice menu"""
+        choices = [
+            (_("Convert Simple → Grid (110x56 → 200x120)"), "simple_to_grid"),
+            (_("Convert Grid → Simple (200x120 → 110x56)"), "grid_to_simple"),
+        ]
+        
+        self.session.openWithCallback(
+            self.piconConverterCallback,
+            ChoiceBox,
+            title=_("Select Picon Conversion Type"),
+            list=choices
+        )
+    
+    def piconConverterCallback(self, choice):
+        """Handle picon converter choice"""
+        if choice:
+            conversion_type = choice[1]
+            
+            # Check if PIL is available
+            try:
+                from PIL import Image
+                # Open converter
+                self.session.open(IPStreamerPiconConverter, conversion_type)
+            except ImportError:
+                self.session.open(MessageBox, 
+                    _("Python PIL/Pillow library not found!\n\n"
+                      "Install it with:\n"
+                      "opkg update && opkg install python3-pillow\n\n"
+                      "Or if using Python 2:\n"
+                      "opkg update && opkg install python-imaging"), 
+                    MessageBox.TYPE_ERROR, timeout=15)
+
+    def createSetup(self):
+        """Create settings menu with dynamic picon path based on view mode"""
+        self.list = [getConfigListEntry(_("Player"), config.plugins.IPStreamer.player)]
+        
+        if config.plugins.IPStreamer.player.value == "gst1.0-ipstreamer":
+            self.list.append(getConfigListEntry(_("Sync Audio using"), config.plugins.IPStreamer.sync))
+        
+        self.list.append(getConfigListEntry(_("Audio Equalizer"), config.plugins.IPStreamer.equalizer))
+        self.list.append(getConfigListEntry(_("External links volume level"), config.plugins.IPStreamer.volLevel))
+        self.list.append(getConfigListEntry(_("Keep original channel audio"), config.plugins.IPStreamer.keepaudio))
+        self.list.append(getConfigListEntry(_("Force DVB audio mute hack"), config.plugins.IPStreamer.forceMuteHack))
+        self.list.append(getConfigListEntry(_("Video Delay"), config.plugins.IPStreamer.tsDelay))
+        self.list.append(getConfigListEntry(_("Audio Delay"), config.plugins.IPStreamer.audioDelay))
+        
+        # View mode selection
+        self.list.append(getConfigListEntry(_("View Mode"), config.plugins.IPStreamer.viewMode))
+        
+        # Show picon path based on current view mode
+        if config.plugins.IPStreamer.viewMode.value == "grid":
+            self.list.append(getConfigListEntry(_("Grid Picons Folder (200x120)"), config.plugins.IPStreamer.piconPathGrid))
+        else:
+            self.list.append(getConfigListEntry(_("List Picons Folder (110x56)"), config.plugins.IPStreamer.piconPathSimple))
+        
+        # Settings folder
+        self.list.append(getConfigListEntry(_("Settings Folder"), config.plugins.IPStreamer.settingsPath))
+        
+        self.list.append(getConfigListEntry(_("Remove/Reset Playlist"), config.plugins.IPStreamer.playlist))
+        self.list.append(getConfigListEntry(_("Enable/Disable online update"), config.plugins.IPStreamer.update))
+        self.list.append(getConfigListEntry(_("Show IPStreamer in main menu"), config.plugins.IPStreamer.mainmenu))
+        self.list.append(getConfigListEntry(_("Select Your IPStreamer Skin"), config.plugins.IPStreamer.skin))
+        self.list.append(getConfigListEntry(_("EPG Source:"), config.plugins.IPStreamer.epgSource))
+        self.list.append(getConfigListEntry(_("EPG Time Zone (base UTC+03:00)"), config.plugins.IPStreamer.epgOffset))
+        self.list.append(getConfigListEntry(_("Orange username"), config.plugins.IPStreamer.orange_user))
+        self.list.append(getConfigListEntry(_("Orange password"), config.plugins.IPStreamer.orange_pass))
+        self.list.append(getConfigListEntry(_("SatFamily username"), config.plugins.IPStreamer.satfamily_user))
+        self.list.append(getConfigListEntry(_("SatFamily password"), config.plugins.IPStreamer.satfamily_pass))
+        
+        self["config"].list = self.list
+        self["config"].setList(self.list)
+
+    def apply(self):
+        current = self["config"].getCurrent()
+        if current[1] == config.plugins.IPStreamer.playlist:
+            self.session.open(IPStreamerPlaylist)
+        else:
+            # Get old values before saving
+            old_settings_path = config.plugins.IPStreamer.settingsPath.value
+            old_picon_simple = config.plugins.IPStreamer.piconPathSimple.value
+            old_picon_grid = config.plugins.IPStreamer.piconPathGrid.value
+            
+            # Save all settings
+            for x in self["config"].list:
+                if len(x) > 1:
+                    x[1].save()
+            configfile.save()
+            
+            # Create directories if they don't exist
+            new_settings_path = config.plugins.IPStreamer.settingsPath.value
+            
+            # Create settings directory
+            if not os.path.exists(new_settings_path):
+                try:
+                    os.makedirs(new_settings_path)
+                    self.session.open(MessageBox, _("Settings folder created: {}").format(new_settings_path), MessageBox.TYPE_INFO, timeout=3)
+                except Exception as e:
+                    self.session.open(MessageBox, _("Failed to create settings folder: {}\nError: {}").format(new_settings_path, str(e)), MessageBox.TYPE_ERROR, timeout=5)
+            
+            # Check picon folders based on view mode
+            if config.plugins.IPStreamer.viewMode.value == "grid":
+                new_picon_path = config.plugins.IPStreamer.piconPathGrid.value
+                picon_type = "Grid (200x120)"
+            else:
+                new_picon_path = config.plugins.IPStreamer.piconPathSimple.value
+                picon_type = "List (110x56)"
+            
+            # Create picon directory if it doesn't exist
+            if not os.path.exists(new_picon_path):
+                try:
+                    os.makedirs(new_picon_path)
+                    self.session.open(MessageBox, _("{} picon folder created: {}").format(picon_type, new_picon_path), MessageBox.TYPE_INFO, timeout=5)
+                except Exception as e:
+                    self.session.open(MessageBox, _("{} picon folder does not exist: {}\nPlease create it manually.\nError: {}").format(picon_type, new_picon_path, str(e)), MessageBox.TYPE_WARNING, timeout=8)
+            
+            # Check if skin changed
+            if self.currentSkin != config.plugins.IPStreamer.skin.value:
+                self.session.open(MessageBox, _("Skin changed! Please restart IPStreamer plugin for changes to take effect."), MessageBox.TYPE_INFO, timeout=5)
+            
+            # Check if settings path changed
+            if old_settings_path != new_settings_path:
+                self.session.open(MessageBox, _("Settings folder changed!\nOld: {}\nNew: {}\n\nExisting playlists and delays in old location will not be moved automatically.").format(old_settings_path, new_settings_path), MessageBox.TYPE_INFO, timeout=10)
+            
+            # Check if picon paths changed
+            path_changed = False
+            if old_picon_simple != config.plugins.IPStreamer.piconPathSimple.value:
+                path_changed = True
+            if old_picon_grid != config.plugins.IPStreamer.piconPathGrid.value:
+                path_changed = True
+            
+            if path_changed:
+                self.session.open(MessageBox, _("Picon folder paths updated:\n\nList view: {}\nGrid view: {}").format(
+                    config.plugins.IPStreamer.piconPathSimple.value,
+                    config.plugins.IPStreamer.piconPathGrid.value
+                ), MessageBox.TYPE_INFO, timeout=8)
+            
+            # Close only settings screen, not the main plugin
+            self.close(False)
+
+    def keyCancel(self):
+        # Revert changes on cancel
+        for x in self["config"].list:
+            if len(x) > 1:
+                x[1].cancel()
+        self.close(False)
+
+    def changedEntry(self):
+        """Called when any setting changes"""
+        for x in self.onChangedEntry:
+            x()
+        
+        # Get current item
+        current = self["config"].getCurrent()
+        
+        # Rebuild the list when player or view mode changes
+        if current and len(current) > 1:
+            if current[1] == config.plugins.IPStreamer.player:
+                # Player changed - rebuild to show/hide sync option
+                self.createSetup()
+            elif current[1] == config.plugins.IPStreamer.viewMode:
+                # View mode changed - rebuild to show correct picon path
+                self.createSetup()
+
+class IPStreamerScreen(Screen):
+
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        self.session = session
+        
+        # REPLACE THIS SECTION:
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerScreen_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerScreen_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerScreen_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerScreen_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerScreen_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerScreen_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerScreen_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerScreen_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerScreen_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerScreen_ORANGE_FHD
+        
+        self.choices = list(self.getHosts())
+        self.plIndex = 0
+        self['title'] = Label()  # ADD THIS
+        self['title'].setText('IPStreamer v{}'.format(Ver))  # ADD THIS
+        self['server'] = Label()
+        self['sync'] = Label()
+
+        # NEW: Load video delay for current channel with fallback to config value
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        # Ensure config has valid value
+        if config.plugins.IPStreamer.tsDelay.value is None:
+            config.plugins.IPStreamer.tsDelay.value = 5
+            config.plugins.IPStreamer.tsDelay.save()
+        current_delay = config.plugins.IPStreamer.tsDelay.value  # Current config value as fallback
+        
+        # Try to get saved delay for this channel, fallback to current config
+        loaded_delay = getVideoDelayForChannel(current_service, fallback=current_delay)
+        # Ensure loaded_delay is valid
+        if loaded_delay is None:
+            loaded_delay = 5
+        
+        # Update config with loaded delay (either saved or fallback)
+        config.plugins.IPStreamer.tsDelay.value = loaded_delay
+        
+        # Display real seconds (no conversion)
+        self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+        # Ensure audio delay is also valid
+        if config.plugins.IPStreamer.audioDelay.value is None:
+            config.plugins.IPStreamer.audioDelay.value = 0
+            config.plugins.IPStreamer.audioDelay.save()        
+        self['audio_delay'] = Label()
+        # Display audio delay in seconds
+        self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+        self['network_status'] = Label()  # For network status
+        self['network_status'].setText('')
+        # ADD COUNTDOWN WIDGET
+        self['countdown'] = Label()
+        self['countdown'].setText('')
+        
+        self["list"] = MenuList([], enableWrapAround=True, content=eListboxPythonMultiContent)
+        
+        if isHD():
+            self["list"].l.setItemHeight(40)
+            self["list"].l.setFont(0, gFont('Regular', 20))
+        else:
+            self["list"].l.setItemHeight(50)
+            self["list"].l.setFont(0, gFont('Regular', 28))
+        
+        self["key_red"] = Button(_("Exit"))
+        self["key_green"] = Button(_("Reset Audio"))
+        self["key_yellow"] = Button(_("Download Picon"))
+        self["key_blue"] = Button(_("Download List"))
+        self["key_help"] = Button(_("Help"))
+        self["key_info"] = Button(_("Info"))
+        self["key_menu"] = Button(_("Menu"))
+        self["key_epg"] = Button(_("EPG"))
+        self["IPStreamerAction"] = ActionMap(["IPStreamerActions", "ColorActions"],
+            {
+                "ok": self.ok,
+                "ok_long": boundFunction(self.ok, long=True),
+                "cancel": self.exit,
+                "menu": self.openConfig,
+                "red": self.exit,        # ADD THIS - Red button exits
+                "green": self.resetAudio,
+                "yellow": self.downloadPicon,
+                "help": self.showHelp,  # ADD THIS
+                "blue": self.downloadList,    # ADD THIS
+                "info": self.showInfo,
+                "right": self.right,
+                "left": self.left,
+                "pause": self.pause,
+                "pauseAudio": self.pauseAudioProcess,
+                "delayUP": self.delayUP,
+                "delayDown": self.delayDown,
+                "audioDelayDown": self.audioDelayDown,
+                "audioDelayReset": self.audioDelayReset,
+                "audioDelayUp": self.audioDelayUp,
+                "clearVideoDelay": self.clearVideoDelay,
+                "fetchEPG": self.fetchEPG,  # new
+            }, -1)
+        
+        self.alsa = None
+        self.audioPaused = False
+        self.audio_process = None
+        self.radioList = []
+
+        # ADD COUNTDOWN TRACKING
+        self.currentDelaySeconds = 0  # Current active delay
+        self.targetDelaySeconds = 0   # Target delay we want to reach
+        self.countdownValue = 0
+        # NEW: Add bitrate tracking
+        self.currentBitrate = None
+        self.bitrateCheckTimer = eTimer()
+        try:
+            self.bitrateCheckTimer.callback.append(self.checkAudioBitrate)
+        except:
+            self.bitrateCheckTimer_conn = self.bitrateCheckTimer.timeout.connect(self.checkAudioBitrate)        
+        
+        if HAVE_EALSA:
+            self.alsa = eAlsaOutput.getInstance()
+        
+        # Initialize all timers
+        self.timeShiftTimer = eTimer()
+        self.statusTimer = eTimer()
+        self.countdownTimer = eTimer()  # ADD THIS
+        
+        try:
+            self.timeShiftTimer.callback.append(self.unpauseService)
+            self.statusTimer.callback.append(self.checkNetworkStatus)
+            self.countdownTimer.callback.append(self.updateCountdown)  # ADD THIS
+        except:
+            self.timeShiftTimer_conn = self.timeShiftTimer.timeout.connect(self.unpauseService)
+            self.statusTimer_conn = self.statusTimer.timeout.connect(self.checkNetworkStatus)
+            self.countdownTimer_conn = self.countdownTimer.timeout.connect(self.updateCountdown)  # ADD THIS
+        
+        self.lastservice = self.session.nav.getCurrentlyPlayingServiceReference()
+        
+        if config.plugins.IPStreamer.update.value:
+            self.checkupdates()
+
+        self.onShown.append(self.onWindowShow)
+
+    def downloadPicon(self):
+        """Yellow button - open picon provider choice"""
+        providers = [
+            ("zalata_audio", "zalata_audio"),
+            ("haitham_audio", "haitham_audio"), 
+            ("mohamed_audio", "mohamed_audio")
+        ]
+        self.session.openWithCallback(self.providerChoiceCallback, ChoiceBox, 
+            title="Select Picon Provider", list=providers)
+
+    def providerChoiceCallback(self, choice):
+        """Callback for provider selection - show grid/simple choice"""
+        if not choice:
+            return
+        self.selected_provider = choice[1]
+        picon_types = [
+            ("Download Grid Picon", "grid"),
+            ("Download Simple Picon", "simple")
+        ]
+        self.session.openWithCallback(self.piconTypeCallback, ChoiceBox, 
+            title=f"Select Picon Type for {self.selected_provider}", list=picon_types)
+
+    def piconTypeCallback(self, choice):
+        """Callback for picon type - start download"""
+        if not choice:
+            return
+        picon_type = choice[1]  # "grid" or "simple"
+        self.downloadPiconArchive(self.selected_provider, picon_type)
+
+    def downloadPiconArchive(self, provider, picon_type):
+        """Download and extract specific picon tar.gz - FIXED path handling"""
+        base_url = f"https://raw.githubusercontent.com/popking159/ipstreamer/main/{provider}"
+        filename = f"{picon_type}.tar.gz"
+        download_url = f"{base_url}/{filename}"
+        
+        # Target paths from config
+        if picon_type == "grid":
+            target_path = config.plugins.IPStreamer.piconPathGrid.value
+        else:
+            target_path = config.plugins.IPStreamer.piconPathSimple.value
+        
+        tmp_file = f"/tmp/{provider}_{filename}"
+        
+        try:
+            # Download tar.gz to /tmp/
+            import urllib.request
+            urllib.request.urlretrieve(download_url, tmp_file)
+            
+            # Ensure target directory exists
+            if not os.path.exists(target_path):
+                os.makedirs(target_path)
+            
+            # Clear existing picons in target path FIRST
+            for root, dirs, files in os.walk(target_path):
+                for file in files:
+                    if file.endswith('.png'):
+                        os.remove(os.path.join(root, file))
+            
+            # Extract tar.gz - FIXED: extract members one by one to target_path
+            import tarfile
+            with tarfile.open(tmp_file, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    if member.isfile() and member.name.endswith('.png'):
+                        # Extract PNG files only, directly to target_path (strip subdirs)
+                        member_path = os.path.join(target_path, os.path.basename(member.name))
+                        tar.makefile(member, member_path)
+            
+            # Clean up tmp file
+            os.remove(tmp_file)
+            
+            self.session.open(MessageBox, 
+                f"{picon_type.title()} picons for {provider} downloaded to {target_path}!", 
+                MessageBox.TYPE_INFO, timeout=5)
+            
+        except Exception as e:
+            self.session.open(MessageBox, 
+                f"Download failed: {str(e)}", 
+                MessageBox.TYPE_ERROR, timeout=5)
+
+    def downloadList(self):
+        """Blue button: download provider M3U and convert to IPStreamer JSON."""
+        choices = [
+            (_("Orange Audio"), "orange"),
+            (_("SATFamily Audio"), "satfamily"),
+        ]
+        self.session.openWithCallback(
+            self.downloadListChoice,
+            ChoiceBox,
+            title=_("Select list to download"),
+            list=choices
+        )
+
+    def downloadListChoice(self, choice):
+        if not choice:
+            return
+        provider = choice[1]
+
+        if provider == "orange":
+            base_name = "orange"
+            username = config.plugins.IPStreamer.orange_user.value.strip()
+            password = config.plugins.IPStreamer.orange_pass.value.strip()
+            if not username or not password:
+                self.session.open(
+                    MessageBox,
+                    _("Please enter Orange username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+
+        elif provider == "satfamily":
+            base_name = "satfamily"
+            username = config.plugins.IPStreamer.satfamily_user.value.strip()
+            password = config.plugins.IPStreamer.satfamily_pass.value.strip()
+            if not username or not password:
+                self.session.open(
+                    MessageBox,
+                    _("Please enter SatFamily username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+        else:
+            return
+
+        # Direct URL
+        if username.startswith("http://") or username.startswith("https://"):
+            m3u_urls = [(username, "direct")]
+        else:
+            m3u_urls = build_provider_url(provider, username, password)
+            if not m3u_urls:
+                self.session.open(
+                    MessageBox,
+                    _("Could not build playlist URL.\nCheck username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+
+        last_error = None
+        m3u_text = None
+
+        for url, fmt in m3u_urls:
+            cprint("[IPStreamer] Trying %s URL (%s): %s" % (provider, fmt, url))
+            try:
+                m3u_text = simpleDownloadM3U(url)
+                cprint("[IPStreamer] %s M3U download OK using %s" % (provider, fmt))
+                break
+            except Exception as e:
+                last_error = str(e)
+                cprint("[IPStreamer] %s M3U download failed (%s): %s" % (provider, fmt, last_error))
+                m3u_text = None
+
+        if not m3u_text:
+            self.session.open(
+                MessageBox,
+                _("Download failed.\nLast error:\n%s") % (last_error or _("Unknown error")),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+            return
+
+        # Rest of your code unchanged
+        json_data, count = self.m3uToIPStreamerJson(m3u_text, base_name)
+        if count == 0:
+            self.session.open(
+                MessageBox,
+                _("No channels found in downloaded list."),
+                MessageBox.TYPE_INFO, timeout=5
+            )
+            return
+
+        json_data = self.applyProviderRenames(json_data, base_name)
+        out_dir = config.plugins.IPStreamer.settingsPath.value
+        try:
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+            out_path = os.path.join(out_dir, "ipstreamer_%s.json" % base_name)
+            with open(out_path, "w") as f:
+                json.dump(json_data, f, indent=4)
+        except Exception as e:
+            self.session.open(
+                MessageBox,
+                _("Save failed:\n%s") % str(e),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+            return
+
+        msg = _("Download and conversion successful!\n\n"
+                "Provider: %s\n"
+                "Channels: %d\n"
+                "Saved to:\n%s") % (choice[0], count, out_path)
+        self.session.open(MessageBox, msg, MessageBox.TYPE_INFO, timeout=7)
+
+    def m3uToIPStreamerJson(self, m3u_text, base_name):
+        lines = m3u_text.splitlines()
+        playlist = []
+        last_name = None
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#EXTM3U"):
+                continue
+            if line.startswith("#EXTINF"):
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    last_name = parts[1].strip()
+            elif line.startswith("http://") or line.startswith("https://"):
+                url = line
+                if not last_name:
+                    continue
+                playlist.append({"channel": last_name, "url": url})
+                last_name = None
+
+        return {"playlist": playlist}, len(playlist)
+
+    def applyProviderRenames(self, json_data, base_name):
+        """
+        Apply simple name mapping rules per provider.
+        base_name: "orange" or "satfamily".
+        """
+        if "playlist" not in json_data:
+            return json_data
+
+        for ch in json_data["playlist"]:
+            name = ch.get("channel", "")
+
+            if base_name == "orange":
+                # Orange / Middle / Delay Audio → SPORTS
+                if "Orange Audio" in name:
+                    name = name.replace("Orange Audio", "Orange SPORTS")
+                if "Middle Audio" in name:
+                    name = name.replace("Middle Audio", "Middle SPORTS")
+                if "Delay Audio" in name:
+                    name = name.replace("Delay Audio", "Delay SPORTS")
+
+            elif base_name == "satfamily":
+                # SatFamily-4k-N / SatFamily-4k-XtraN → 4k SPORTS N / 4k SPORTS Xtra N
+                if name.startswith("SatFamily-4k-"):
+                    tail = name[len("SatFamily-4k-"):].strip()  # e.g. "1" or "Xtra1"
+
+                    if tail.lower().startswith("xtra"):
+                        # Xtra inside 4K: Xtra1 → Xtra 1
+                        suffix = tail[4:].strip()
+                        if suffix:
+                            tail = "Xtra %s" % suffix
+                        else:
+                            tail = "Xtra"
+
+                    name = "4k SPORTS %s" % tail
+
+                # SatFamily-N-VIP → VIP SPORTS N
+                if "SatFamily-" in name and "-VIP" in name:
+                    try:
+                        middle = name.split("SatFamily-")[1]  # "3-VIP"
+                        n = middle.split("-VIP")[0].strip()
+                        name = "VIP SPORTS %s" % n
+                    except Exception:
+                        pass
+
+                # SatFamily-N-Low / SatFamily-XtraN-Low → LOW SPORTS N / LOW SPORTS Xtra N
+                if "SatFamily-" in name and "-Low" in name:
+                    try:
+                        middle = name.split("SatFamily-")[1]  # "5-Low" or "Xtra1-Low"
+                        core = middle.split("-Low")[0].strip()  # "5" or "Xtra1"
+
+                        if core.lower().startswith("xtra"):
+                            suffix = core[4:].strip()
+                            if suffix:
+                                core = "Xtra %s" % suffix
+                            else:
+                                core = "Xtra"
+
+                        name = "LOW SPORTS %s" % core
+                    except Exception:
+                        pass
+
+            ch["channel"] = name
+
+        return json_data
+
+    def fetchEPG(self):
+        try:
+            if config.plugins.IPStreamer.epgSource.value == "official":
+                from .beinepg import fetch_and_build_simple_epg
+                path = fetch_and_build_simple_epg()
+                msg = _("Official beIN EPG updated: %s") % path
+            else:
+                from .beinepg import fetch_and_build_simple_epg_local
+                path = fetch_and_build_simple_epg_local()
+                msg = _("Local XML EPG updated: %s") % path
+            
+            self.session.open(
+                MessageBox,
+                msg,
+                MessageBox.TYPE_INFO,
+                timeout=3
+            )
+            self.setPlaylist()  # Rebuilds EPG index from simple_epg.json
+        except Exception as e:
+            trace_error()
+            self.session.open(
+                MessageBox,
+                _("EPG fetch failed: %s") % str(e),
+                MessageBox.TYPE_ERROR,
+                timeout=5
+            )
+
+    def updateCountdown(self):
+        """Update countdown display every second"""
+        if self.countdownValue > 0:
+            self['countdown'].setText('TimeShift: {}s'.format(self.countdownValue))
+            self.countdownValue -= 1
+            self.countdownTimer.start(1000, True)  # Single shot, 1 second
+        else:
+            self['countdown'].setText('')
+            self.countdownTimer.stop()
+
+    def startCountdown(self, seconds):
+        """Start countdown timer"""
+        if seconds > 0:
+            self.countdownValue = int(seconds)
+            self.countdownTimer.start(100, True)  # Start after 100ms
+            self.updateCountdown()
+
+    def showInfo(self):
+        """Open info/about screen"""
+        self.session.open(IPStreamerInfo)
+
+    def showHelp(self):
+        """Open help screen"""
+        self.session.open(IPStreamerHelp)
+
+    def checkNetworkStatus(self):
+        """Check if audio stream is still playing with bitrate info"""
+        if self.audio_process:
+            # Check if process is still running
+            if self.audio_process.poll() is None:
+                # Process is running
+                if self.currentBitrate is not None:
+                    self['network_status'].setText('● Playing {}kb/s'.format(self.currentBitrate))
+                else:
+                    self['network_status'].setText('● Playing')
+            else:
+                self['network_status'].setText('✗ Stopped')
+                self.audio_process = None
+                self.currentBitrate = None
+        else:
+            self['network_status'].setText('')
+            self.currentBitrate = None
+
+    def checkAudioBitrate(self):
+        """Check audio bitrate of current stream"""
+        if hasattr(self, 'url') and self.url and config.plugins.IPStreamer.running.value:
+            cprint("[IPStreamer] Checking bitrate for: {}".format(self.url))
+            
+            # Get bitrate in background thread to avoid blocking
+            bitrate = getAudioBitrate(self.url)
+            
+            if bitrate:
+                self.currentBitrate = bitrate
+                cprint("[IPStreamer] Detected bitrate: {} kb/s".format(bitrate))
+                # Update display immediately
+                if self.audio_process and self.audio_process.poll() is None:
+                    self['network_status'].setText('● Playing {}kb/s'.format(self.currentBitrate))
+            else:
+                cprint("[IPStreamer] Could not detect bitrate")
+                self.currentBitrate = None
+        
+        # Stop timer after first check
+        self.bitrateCheckTimer.stop()
+
+    def getTimeshift(self):
+        service = self.session.nav.getCurrentService()
+        return service and service.timeshift()
+
+    def pauseAudioProcess(self):
+        if config.plugins.IPStreamer.running.value and IPStreamerHandler.container.running():
+            pid = IPStreamerHandler.container.getPID()
+            if not self.audioPaused:
+                cmd = "kill -STOP {}".format(pid)
+                self.audioPaused = True
+            else:
+                cmd = "kill -CONT {}".format(pid)
+                self.audioPaused = False
+            eConsoleAppContainer().execute(cmd)
+
+    def pause(self):
+        """Activate TimeShift with smart delay calculation"""
+        if config.plugins.IPStreamer.running.value:
+            ts = self.getTimeshift()
+            
+            if ts is None:
+                return
+            
+            # Use real seconds directly (no conversion)
+            self.targetDelaySeconds = config.plugins.IPStreamer.tsDelay.value
+            
+            if not ts.isTimeshiftEnabled():
+                # First time activation - full delay
+                cprint("[IPStreamer] Starting TimeShift with {}s delay".format(self.targetDelaySeconds))
+                
+                ts.startTimeshift()
+                ts.activateTimeshift()
+                
+                delay_ms = int(self.targetDelaySeconds * 1000)
+                self.timeShiftTimer.start(delay_ms, False)
+                
+                # Start countdown
+                self.startCountdown(self.targetDelaySeconds)
+                self.currentDelaySeconds = self.targetDelaySeconds
+                
+            elif ts.isTimeshiftEnabled() and not self.timeShiftTimer.isActive():
+                # TimeShift already active - calculate difference
+                delay_difference = self.targetDelaySeconds - self.currentDelaySeconds
+                
+                if abs(delay_difference) < 0.5:  # Already at target (tolerance 0.5s)
+                    cprint("[IPStreamer] Already at target delay {}s".format(self.targetDelaySeconds))
+                    return
+                
+                if delay_difference > 0:
+                    # Need MORE delay - pause and wait for difference
+                    cprint("[IPStreamer] Increasing delay by {}s (from {}s to {}s)".format(
+                        delay_difference, self.currentDelaySeconds, self.targetDelaySeconds))
+                    
+                    service = self.session.nav.getCurrentService()
+                    pauseable = service.pause()
+                    if pauseable:
+                        pauseable.pause()
+                    
+                    # Only wait for the additional time needed
+                    additional_delay_ms = int(delay_difference * 1000)
+                    self.timeShiftTimer.start(additional_delay_ms, False)
+                    
+                    # Countdown for additional delay only
+                    self.startCountdown(delay_difference)
+                    self.currentDelaySeconds = self.targetDelaySeconds
+                    
+                else:
+                    # Need LESS delay - restart TimeShift with new delay
+                    cprint("[IPStreamer] Decreasing delay to {}s (was {}s)".format(
+                        self.targetDelaySeconds, self.currentDelaySeconds))
+                    
+                    ts.stopTimeshift()
+                    ts.startTimeshift()
+                    ts.activateTimeshift()
+                    
+                    delay_ms = int(self.targetDelaySeconds * 1000)
+                    self.timeShiftTimer.start(delay_ms, False)
+                    
+                    # Countdown for new delay
+                    self.startCountdown(self.targetDelaySeconds)
+                    self.currentDelaySeconds = self.targetDelaySeconds
+
+    def unpauseService(self):
+        self.timeShiftTimer.stop()
+        service = self.session.nav.getCurrentService()
+        pauseable = service.pause()
+        if pauseable:
+            pauseable.unpause()
+
+    def delayUP(self):
+        """Increase TimeShift delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.tsDelay.value is None:
+            config.plugins.IPStreamer.tsDelay.value = 5
+        
+        if config.plugins.IPStreamer.tsDelay.value < 300:  # Max 300 seconds
+            config.plugins.IPStreamer.tsDelay.value += 1  # Add 1 second
+            config.plugins.IPStreamer.tsDelay.save()
+            
+            # Display in seconds
+            self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+            
+            # Save delay for current channel
+            current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+            saveVideoDelayForChannel(current_service, config.plugins.IPStreamer.tsDelay.value)
+
+    def delayDown(self):
+        """Decrease TimeShift delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.tsDelay.value is None:
+            config.plugins.IPStreamer.tsDelay.value = 5
+        
+        if config.plugins.IPStreamer.tsDelay.value > 0:  # Min 0 seconds
+            config.plugins.IPStreamer.tsDelay.value -= 1  # Subtract 1 second
+            config.plugins.IPStreamer.tsDelay.save()
+            
+            # Display in seconds
+            self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+            
+            # Save delay for current channel
+            current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+            saveVideoDelayForChannel(current_service, config.plugins.IPStreamer.tsDelay.value)
+
+    def getHosts(self):
+        """Get all available playlists including custom categories"""
+        hosts = resolveFilename(SCOPE_PLUGINS, "Extensions/IPStreamer/hosts.json")
+        self.hosts = None
+        
+        if fileExists(hosts):
+            hosts = open(hosts, 'r').read()
+            self.hosts = json.loads(hosts, object_pairs_hook=OrderedDict)
+            for host in self.hosts:
+                yield host
+        
+        # Add custom playlist categories
+        custom_playlists = getPlaylistFiles()
+        for playlist in custom_playlists:
+            yield playlist['name']
+
+    def onWindowShow(self):
+        self.onShown.remove(self.onWindowShow)
+        
+        # Check and update video delay for current channel with fallback
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        current_delay = config.plugins.IPStreamer.tsDelay.value  # Use current as fallback
+        
+        # Get saved delay or use current config as fallback
+        loaded_delay = getVideoDelayForChannel(current_service, fallback=current_delay)
+        
+        # Update display - real seconds
+        config.plugins.IPStreamer.tsDelay.value = loaded_delay
+        self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+        
+        # NEW: Try to restore last selected audio channel
+        restored = False
+        
+        if config.plugins.IPStreamer.lastAudioChannel.value:
+            last_url = config.plugins.IPStreamer.lastAudioChannel.value
+            cprint("[IPStreamer] Attempting to restore last audio channel: {}".format(last_url))
+            
+            # First, try to restore from lastidx (playlist + channel index)
+            if config.plugins.IPStreamer.lastidx.value:
+                try:
+                    lastplaylist, lastchannel = map(int, config.plugins.IPStreamer.lastidx.value.split(','))
+                    self.plIndex = lastplaylist
+                    self.changePlaylist()
+                    
+                    # Verify the channel at this index matches the saved URL
+                    if len(self.radioList) > lastchannel:
+                        if self.radioList[lastchannel][1] == last_url:
+                            self['list'].moveToIndex(lastchannel)
+                            cprint("[IPStreamer] Restored to playlist {} channel {}".format(lastplaylist, lastchannel))
+                            restored = True
+                        else:
+                            # Index doesn't match, search for URL
+                            cprint("[IPStreamer] Index mismatch, searching for URL in current playlist")
+                            for idx, channel in enumerate(self.radioList):
+                                if channel[1] == last_url:
+                                    self['list'].moveToIndex(idx)
+                                    cprint("[IPStreamer] Found channel at index {}".format(idx))
+                                    restored = True
+                                    break
+                except Exception as e:
+                    cprint("[IPStreamer] Error restoring from lastidx: {}".format(str(e)))
+            
+            # If not restored yet, search all playlists for the URL
+            if not restored:
+                cprint("[IPStreamer] Searching all playlists for last audio channel")
+                found = False
+                
+                for playlist_idx, playlist_name in enumerate(self.choices):
+                    self.plIndex = playlist_idx
+                    self.changePlaylist()
+                    
+                    # Search in current playlist
+                    for channel_idx, channel in enumerate(self.radioList):
+                        if channel[1] == last_url:
+                            self['list'].moveToIndex(channel_idx)
+                            cprint("[IPStreamer] Found in playlist '{}' at index {}".format(playlist_name, channel_idx))
+                            
+                            # Update lastidx to new position
+                            config.plugins.IPStreamer.lastidx.value = '{},{}'.format(playlist_idx, channel_idx)
+                            config.plugins.IPStreamer.lastidx.save()
+                            
+                            found = True
+                            restored = True
+                            break
+                    
+                    if found:
+                        break
+                
+                if not restored:
+                    cprint("[IPStreamer] Could not find last audio channel, using first available")
+        
+        # Fallback: If not restored, use first playlist and first channel
+        if not restored:
+            if config.plugins.IPStreamer.lastidx.value:
+                try:
+                    lastplaylist, lastchannel = map(int, config.plugins.IPStreamer.lastidx.value.split(','))
+                    self.plIndex = lastplaylist
+                    self.changePlaylist()
+                    self['list'].moveToIndex(lastchannel)
+                    cprint("[IPStreamer] Using lastidx fallback: playlist {} channel {}".format(lastplaylist, lastchannel))
+                except:
+                    self.setPlaylist()
+            else:
+                self.setPlaylist()
+
+    def clearVideoDelay(self):
+        """Clear saved video delay for current channel"""
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        if current_service:
+            ref_str = current_service.toString()
+            data = loadVideoDelayData()
+            
+            if ref_str in data:
+                del data[ref_str]
+                saveVideoDelayData(data)
+                cprint("[IPStreamer] Cleared saved delay for channel: {}".format(ref_str))
+                self.session.open(MessageBox, _("Video delay cleared for this channel"), MessageBox.TYPE_INFO, timeout=3)
+            else:
+                self.session.open(MessageBox, _("No saved delay for this channel"), MessageBox.TYPE_INFO, timeout=3)
+
+    def checkupdates(self):
+        """Check for plugin updates from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/main/installer-ipstreamer.sh"
+        self.callUrl(url, self.checkVer)
+
+    def checkVer(self, data):
+        """Parse version from installer script"""
+        try:
+            if PY3:
+                data = data.decode('utf-8')
+            else:
+                data = data.encode('utf-8')
+            
+            if data:
+                lines = data.split('\n')
+                self.newversion = None
+                self.newdescription = ""
+                
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('version='):
+                        # Extract version: version="8.1"
+                        self.newversion = line.split('=')[1].strip('"').strip("'")
+                    elif line.startswith('description='):
+                        # Extract description: description="New features"
+                        self.newdescription = line.split('=')[1].strip('"').strip("'")
+                
+                if self.newversion:
+                    cprint("[IPStreamer] Current version: {}, New version: {}".format(Ver, self.newversion))
+                    
+                    # Compare versions
+                    try:
+                        current = float(Ver)
+                        new = float(self.newversion)
+                        
+                        if new > current:
+                            msg = "New version {} is available.\n\n{}\n\nDo you want to install it now?".format(
+                                self.newversion, 
+                                self.newdescription
+                            )
+                            self.session.openWithCallback(
+                                self.installupdate, 
+                                MessageBox, 
+                                msg, 
+                                MessageBox.TYPE_YESNO
+                            )
+                    except ValueError:
+                        cprint("[IPStreamer] Could not compare versions")
+        except Exception as e:
+            cprint("[IPStreamer] Error checking version: {}".format(str(e)))
+            trace_error()
+
+    def installupdate(self, answer=False):
+        """Install update from GitHub"""
+        if answer:
+            url = "https://raw.githubusercontent.com/popking159/ipstreamer/main/installer-ipstreamer.sh"
+            cmdlist = []
+            cmdlist.append('wget -q --no-check-certificate {} -O - | bash'.format(url))
+            self.session.open(
+                Console2, 
+                title="Update IPStreamer", 
+                cmdlist=cmdlist, 
+                closeOnSuccess=False
+            )
+
+    def callUrl(self, url, callback):
+        try:
+            from twisted.web.client import getPage
+            getPage(str.encode(url), headers={b'Content-Type': b'application/x-www-form-urlencoded'}).addCallback(callback).addErrback(self.addErrback)
+        except:
+            pass
+
+    def getAnisUrls(self):
+        """Fetch Anis playlist from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_anis.json"
+        self.callUrl(url, self.parseAnisData)
+
+    def parseAnisData(self, data):
+        """Parse Anis JSON data from GitHub"""
+        try:
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+            
+            playlist_data = json.loads(data)
+            list = []
+            
+            if 'playlist' in playlist_data:
+                for channel in playlist_data['playlist']:
+                    try:
+                        list.append([str(channel['channel']), str(channel['url'])])
+                    except KeyError:
+                        pass
+            
+            if len(list) > 0:
+                self["list"].l.setList(self.iniMenu(list))
+                self["list"].show()
+                self.radioList = list
+            else:
+                self["list"].hide()
+                self.radioList = []
+                self['server'].setText('Anis Sport - Playlist is empty')
+        except Exception as e:
+            cprint("[IPStreamer] Error parsing Anis data: {}".format(str(e)))
+            trace_error()
+            self["list"].hide()
+            self.radioList = []
+            self['server'].setText('Error loading Anis Sport')
+
+    def addErrback(self, error=None):
+        pass
+
+    def right(self):
+        self.plIndex += 1
+        self.changePlaylist()
+
+    def left(self):
+        self.plIndex -= 1
+        self.changePlaylist()
+
+    def changePlaylist(self):
+        if self.plIndex > len(self.choices) - 1:
+            self.plIndex = 0
+        if self.plIndex < 0:
+            self.plIndex = len(self.choices) - 1
+        
+        # Reset radioList when changing playlist
+        self.radioList = []
+        self.setPlaylist()
+
+    def setPlaylist(self):
+        current = self.choices[self.plIndex]
+        
+        if current in self.hosts:
+            if current in ["Anis Sport"]:
+                self.getAnisUrls()
+                self['server'].setText(str(current))
+            else:
+                list = []
+                for cmd in self.hosts[current]['cmds']:
+                    list.append([cmd.split('|')[0], cmd.split('|')[1]])
+                
+                if len(list) > 0:  # Add check
+                    self["list"].l.setList(self.iniMenu(list))
+                    self["list"].show()
+                    self.radioList = list
+                    self['server'].setText(str(current))
+                else:
+                    self["list"].hide()
+                    self.radioList = []  # Initialize empty
+                    self['server'].setText('Playlist is empty')
+        else:
+            # Custom playlist category
+            category_lower = current.lower()
+            playlist_dir = getPlaylistDir()  # Use configurable path
+            playlist_file = playlist_dir + 'ipstreamer_{}.json'.format(category_lower)
+            
+            if fileExists(playlist_file):
+                playlist = getPlaylist(playlist_file)
+                if playlist:
+                    list = []
+                    for channel in playlist['playlist']:
+                        try:
+                            list.append([str(channel['channel']), str(channel['url'])])
+                        except KeyError:
+                            pass
+                    
+                    if len(list) > 0:
+                        self["list"].l.setList(self.iniMenu(list))
+                        self["list"].show()
+                        self.radioList = list
+                        self['server'].setText(current)
+                    else:
+                        self["list"].hide()
+                        self.radioList = []  # Initialize empty
+                        self['server'].setText('{} - Playlist is empty'.format(current))
+                else:
+                    self["list"].hide()
+                    self.radioList = []  # Initialize empty
+                    self['server'].setText('Cannot load playlist')
+            else:
+                self["list"].hide()
+                self.radioList = []  # Initialize empty
+                self['server'].setText('Playlist file not found')
+
+    def iniMenu(self, sList):
+        """
+        Build simple list view entries:
+        - picon (left)
+        - audio name (first line)
+        - EPG event title (second line, if available)
+        """
+        res = []
+        gList = []
+
+        # Build EPG index once per menu
+        ch_events = buildEPGIndex()   # uses simple_epg.json
+        # Example helpers (already in plugin.py):
+        # - getPiconPath(serviceName)
+        # - isHD()
+
+        for elem in sList:
+            # elem: (channel_name, url)
+            name = str(elem[0])
+            url = elem[1]
+
+            # Resolve picon path for this name
+            picon_path = getPiconPath(name)
+            picon = loadPNG(picon_path) if picon_path else None
+
+            # Find EPG title for this audio name
+            epg_title = findEPGTitleForAudioName(name, ch_events)
+
+            # HD vs FHD layout
+            if isHD():
+                # Item size ~ 580x50 (from your existing code)
+                # Picon on left, name + epg stacked on right
+
+                res.append(MultiContentEntryText(
+                    pos=(0, 0), size=(0, 0), font=0,
+                    flags=RT_HALIGN_LEFT | RT_VALIGN_CENTER,
+                    text='', border_width=3
+                ))
+
+                # Picon (40x40) at x=5
+                if picon is not None:
+                    res.append(MultiContentEntryPixmapAlphaTest(
+                        pos=(5, 5), size=(40, 40),
+                        png=picon
+                    ))
+
+                # Audio name (first line)
+                res.append(MultiContentEntryText(
+                    pos=(50, 2), size=(530, 24), font=0,
+                    flags=RT_VALIGN_CENTER | RT_HALIGN_LEFT,
+                    text=name
+                ))
+
+                # EPG title (second line)
+                if epg_title:
+                    res.append(MultiContentEntryText(
+                        pos=(50, 26), size=(530, 22), font=0,
+                        flags=RT_VALIGN_CENTER | RT_HALIGN_LEFT,
+                        text=epg_title
+                    ))
+
+            else:
+                # FHD: more vertical space, item height ~70
+                res.append(MultiContentEntryText(
+                    pos=(0, 0), size=(0, 0), font=0,
+                    flags=RT_HALIGN_LEFT | RT_VALIGN_CENTER,
+                    text='', border_width=3
+                ))
+
+                # Picon (110x56) at x=5
+                if picon is not None:
+                    res.append(MultiContentEntryPixmapAlphaTest(
+                        pos=(5, 2), size=(110, 56),
+                        png=picon
+                    ))
+
+                # Audio name (first line)
+                res.append(MultiContentEntryText(
+                    pos=(120, 0), size=(420, 60), font=0,
+                    flags=RT_VALIGN_CENTER | RT_HALIGN_LEFT,
+                    text=name
+                ))
+
+                # EPG title (second line)
+                if epg_title:
+                    res.append(MultiContentEntryText(
+                        pos=(450, 0), size=(690, 60), font=0,
+                        flags=RT_VALIGN_CENTER | RT_HALIGN_LEFT,
+                        text=epg_title
+                    ))
+
+            gList.append(res)
+            res = []
+
+        return gList
+
+    def ok(self, long=False):
+        # Check if there are any items in the list
+        if not hasattr(self, 'radioList') or len(self.radioList) == 0:
+            self.session.open(MessageBox, _("Playlist is empty! Please add channels first."), MessageBox.TYPE_INFO, timeout=5)
+            return
+        
+        # Check if valid selection
+        index = self['list'].getSelectionIndex()
+        if index is None or index < 0 or index >= len(self.radioList):
+            self.session.open(MessageBox, _("Please select a channel first."), MessageBox.TYPE_INFO, timeout=5)
+            return
+        
+        # Determine which player to use  
+        if config.plugins.IPStreamer.player.value == "gst1.0-ipstreamer":
+            player_check = '/usr/bin/gst-launch-1.0'
+        else:
+            player_check = '/usr/bin/ffmpeg'
+        
+        if fileExists(player_check):
+            currentAudioTrack = 0
+            if long:
+                service = self.session.nav.getCurrentService()
+                if not service.streamed():
+                    currentAudioTrack = service.audioTracks().getCurrentTrack()
+                self.url = 'http://127.0.0.1:8001/{}'.format(self.lastservice.toString())
+                config.plugins.IPStreamer.lastplayed.value = "e2_service"
+            else:
+                try:
+                    self.url = self.radioList[index][1]
+                    config.plugins.IPStreamer.lastplayed.value = self.url
+                    config.plugins.IPStreamer.lastidx.value = '{},{}'.format(self.plIndex, index)
+                    config.plugins.IPStreamer.lastidx.save()
+
+                    # NEW: Save last audio channel URL
+                    config.plugins.IPStreamer.lastAudioChannel.value = self.url
+                    config.plugins.IPStreamer.lastAudioChannel.save()
+                    cprint("[IPStreamer] Saved last audio channel: {}".format(self.url))
+                except (IndexError, KeyError) as e:
+                    cprint("[IPStreamer] Error accessing radioList: {}".format(str(e)))
+                    self.session.open(MessageBox, _("Error selecting channel."), MessageBox.TYPE_ERROR, timeout=5)
+                    return
+            
+            if config.plugins.IPStreamer.player.value == "gst1.0-ipstreamer":
+                # GStreamer path via wrapper
+                delaysec = config.plugins.IPStreamer.audioDelay.value
+                vol_level = config.plugins.IPStreamer.volLevel.value
+
+                try:
+                    cmd = build_gst_cmd(
+                        url=self.url,
+                        delay_sec=delaysec,
+                        volume_level=vol_level,
+                    )
+                    self.runCmd(cmd)
+                except Exception as e:
+                    cprint("IPStreamer GStreamer build error: {}".format(str(e)))
+                    self.session.open(
+                        MessageBox,
+                        _("Cannot build GStreamer command!\n{}").format(str(e)),
+                        MessageBox.TYPE_ERROR,
+                        timeout=5,
+                    )
+                    return
+
+            else:
+                # FFmpeg command with audio delay AND volume
+                delaysec = config.plugins.IPStreamer.audioDelay.value
+                vol_level = config.plugins.IPStreamer.volLevel.value  # 1–100 from config
+                track = currentAudioTrack if currentAudioTrack > 0 else None
+
+                try:
+                    cmd = build_ffmpeg_cmd(
+                        url=self.url,
+                        delay_sec=delaysec,
+                        volume_level=vol_level,
+                        track_index=track,
+                    )
+                    self.runCmd(cmd)
+                except Exception as e:
+                    cprint("IPStreamer FFmpeg build error: {}".format(str(e)))
+                    self.session.open(
+                        MessageBox,
+                        "Cannot build FFmpeg command!\n{}".format(str(e)),
+                        MessageBox.TYPE_ERROR,
+                        timeout=5,
+                    )
+                    return
+            # NEW: Check bitrate after starting audio
+            # Wait 2 seconds for stream to stabilize, then check bitrate
+            self.currentBitrate = None
+            self.bitrateCheckTimer.start(2000, True)  # Single shot after 2 seconds
+        else:
+            self.session.open(MessageBox, _("Cannot play url, player is missing !!"), MessageBox.TYPE_ERROR, timeout=5)
+
+    def restoreService(self):
+        """Restore video service after short delay"""
+        cprint("[IPStreamer] Restoring service")
+        self.session.nav.playService(self.lastservice)
+
+    def runCmd(self, cmd):
+        cprint("[IPStreamer] runCmd called with: {}".format(cmd))
+        
+        # Stop any existing process first
+        if self.audio_process:
+            try:
+                self.audio_process.terminate()
+                try:
+                    self.audio_process.wait(timeout=1)
+                except:
+                    self.audio_process.kill()
+            except:
+                pass
+            self.audio_process = None
+        
+        if IPStreamerHandler.container.running():
+            IPStreamerHandler.container.kill()
+        
+        if self.alsa:
+            self.alsa.stop()
+            self.alsa.close()
+        else:
+            if not config.plugins.IPStreamer.keepaudio.value:
+                if fileExists('/dev/dvb/adapter0/audio0') and not isMutable():
+                    self.session.nav.stopService()
+                    try:
+                        os.rename('/dev/dvb/adapter0/audio0', '/dev/dvb/adapter0/audio10')
+                    except:
+                        pass
+                    self.session.nav.playService(self.lastservice)
+        
+        # Run subprocess exactly like the working plugin
+        try:
+            cprint("[IPStreamer] Executing subprocess...")
+            self.audio_process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            cprint("[IPStreamer] Process started with PID: {}".format(self.audio_process.pid))
+        except Exception as e:
+            cprint("[IPStreamer] ERROR starting process: {}".format(str(e)))
+            trace_error()
+            self.audio_process = None
+        
+        config.plugins.IPStreamer.running.value = True
+        config.plugins.IPStreamer.running.save()
+        # Start status monitoring
+        if not self.statusTimer.isActive():
+            self.statusTimer.start(2000)  # Check every 2 seconds
+
+    def audioDelayUp(self):
+        """Increase audio delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.audioDelay.value is None:
+            config.plugins.IPStreamer.audioDelay.value = 0
+        
+        if config.plugins.IPStreamer.audioDelay.value < 60:  # Max 60 seconds
+            config.plugins.IPStreamer.audioDelay.value += 1  # Add 1 second
+            config.plugins.IPStreamer.audioDelay.save()
+            self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+
+    def audioDelayDown(self):
+        """Decrease audio delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.audioDelay.value is None:
+            config.plugins.IPStreamer.audioDelay.value = 0
+        
+        if config.plugins.IPStreamer.audioDelay.value > -10:  # Min -10 seconds
+            config.plugins.IPStreamer.audioDelay.value -= 1  # Subtract 1 second
+            config.plugins.IPStreamer.audioDelay.save()
+            self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+
+    def audioDelayReset(self):
+        """Reset audio delay to 0"""
+        config.plugins.IPStreamer.audioDelay.value = 0
+        config.plugins.IPStreamer.audioDelay.save()
+        self['audio_delay'].setText('Audio Delay: 0s')
+
+    def resetAudio(self):
+        cprint("[IPStreamer] resetAudio called")
+        
+        # Stop status monitoring
+        if self.statusTimer.isActive():
+            self.statusTimer.stop()
+        # NEW: Stop bitrate check
+        if self.bitrateCheckTimer.isActive():
+            self.bitrateCheckTimer.stop()
+        
+        self.currentBitrate = None  # Clear bitrate        
+        # Kill audio process if running - aggressive approach
+        if self.audio_process:
+            try:
+                cprint("[IPStreamer] Terminating process PID: {}".format(self.audio_process.pid))
+                # Send SIGTERM first
+                self.audio_process.terminate()
+                try:
+                    self.audio_process.wait(timeout=1)
+                    cprint("[IPStreamer] Process terminated gracefully")
+                except subprocess.TimeoutExpired:
+                    # Force kill if still running
+                    cprint("[IPStreamer] Process not responding, force killing")
+                    self.audio_process.kill()
+                    self.audio_process.wait(timeout=1)
+                    cprint("[IPStreamer] Process force killed")
+                self.audio_process = None
+            except Exception as e:
+                cprint("[IPStreamer] Error killing process: {}".format(str(e)))
+                # Force kill using OS command as fallback
+                try:
+                    os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+                except:
+                    pass
+                self.audio_process = None
+        else:
+            # No process tracked, try to kill any running instances
+            cprint("[IPStreamer] No process tracked, killing all gst-launch and ffmpeg")
+            os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+        
+        # Kill container processes
+        if IPStreamerHandler.container.running():
+            IPStreamerHandler.container.kill()
+        
+        # Update status
+        self['network_status'].setText('')
+        
+        # Restore original audio and VIDEO
+        if not self.alsa:
+            if fileExists('/dev/dvb/adapter0/audio10') and not isMutable():
+                # Restore audio device
+                try:
+                    os.rename('/dev/dvb/adapter0/audio10', '/dev/dvb/adapter0/audio0')
+                    cprint("[IPStreamer] Audio device restored")
+                except:
+                    pass
+                
+                # IMPORTANT: Restart the service to restore VIDEO
+                self.session.nav.stopService()
+                self.restoreTimer = eTimer()
+                try:
+                    self.restoreTimer.callback.append(self.restoreService)
+                except:
+                    self.restoreTimer_conn = self.restoreTimer.timeout.connect(self.restoreService)
+                self.restoreTimer.start(100, True)
+            elif isMutable():
+                # For mutable boxes, just restart service to restore video
+                self.session.nav.stopService()
+                self.restoreTimer = eTimer()
+                try:
+                    self.restoreTimer.callback.append(self.restoreService)
+                except:
+                    self.restoreTimer_conn = self.restoreTimer.timeout.connect(self.restoreService)
+                self.restoreTimer.start(100, True)
+        
+        config.plugins.IPStreamer.running.value = False
+        config.plugins.IPStreamer.running.save()
+
+    def openConfig(self):
+        self.session.openWithCallback(self.configClosed, IPStreamerSetup)
+
+    def configClosed(self, ret=None):
+        # Callback after settings closed - do nothing, stay in main screen
+        pass
+
+    def exit(self, ret=False):
+        # Stop all timers
+        
+        if self.statusTimer.isActive():  # ADD THIS
+            self.statusTimer.stop()
+        
+        if self.bitrateCheckTimer.isActive():  # NEW
+            self.bitrateCheckTimer.stop()        
+        # Just close the plugin GUI - audio continues
+        if ret and not self.timeShiftTimer.isActive():
+            self.close()
+        else:
+            self.close()
+
+class IPStreamerScreenGrid(Screen):
+    """Grid view for IPStreamer - 5x3 grid with picons"""
+    
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        self.session = session
+        
+        # Load appropriate skin
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerScreenGrid_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerScreenGrid_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerScreenGrid_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerScreenGrid_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerScreenGrid_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerScreenGrid_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerScreenGrid_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerScreenGrid_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerScreenGrid_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerScreenGrid_ORANGE_FHD
+        
+        self.choices = list(self.getHosts())
+        self.plIndex = 0
+        
+        # Info labels
+        self['title'] = Label()
+        self['title'].setText('IPStreamer v{}'.format(Ver))
+        self['server'] = Label()
+        self['sync'] = Label()
+        self['channelname'] = Label()
+        self['epginfo'] = Label("No EPG")        
+        # Load video delay
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        current_delay = config.plugins.IPStreamer.tsDelay.value
+        loaded_delay = getVideoDelayForChannel(current_service, fallback=current_delay)
+        config.plugins.IPStreamer.tsDelay.value = loaded_delay
+        self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+        
+        self['audio_delay'] = Label()
+        self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+        self['network_status'] = Label()
+        self['network_status'].setText('')
+        self['countdown'] = Label()
+        self['countdown'].setText('')
+        
+        # Buttons
+        self["key_red"] = Button(_("Exit"))
+        self["key_green"] = Button(_("Reset Audio"))
+        self["key_yellow"] = Button(_("Download Picon"))
+        self["key_blue"] = Button(_("Download List"))
+        self["key_info"] = Button(_("Info"))
+        self["key_help"] = Button(_("Help"))
+        self["key_menu"] = Button(_("Menu"))
+        self["key_epg"] = Button(_("EPG"))
+        
+        # Grid widgets - 15 picons and labels
+        self.ITEMS_PER_PAGE = 15
+        for i in range(1, self.ITEMS_PER_PAGE + 1):
+            self['pixmap_{}'.format(i)] = Pixmap()
+            self['label_{}'.format(i)] = Label()
+            self['event_{}'.format(i)] = Label()
+        
+        # Selection frame
+        self['frame'] = MovingPixmap()
+        
+        # Grid positions
+        if isHD():
+            self.positions = getGridPositions("HD")
+            self.frame_offset = (-5, -5)  # Frame border offset
+        else:
+            self.positions = getGridPositions("FHD")
+            self.frame_offset = (-5, -5)
+        
+        # Actions
+        self["IPStreamerAction"] = ActionMap(["IPStreamerActions", "ColorActions"],
+        {
+            "ok": self.ok,
+            "ok_long": boundFunction(self.ok, long=True),
+            "cancel": self.exit,
+            "menu": self.openConfig,
+            "red": self.exit,
+            "green": self.resetAudio,
+            "yellow": self.downloadPicon,
+            "help": self.showHelp,
+            "blue": self.downloadList,    # ADD THIS
+            "info": self.showInfo,
+            "right": self.gridRight,
+            "left": self.gridLeft,
+            "up": self.gridUp,
+            "down": self.gridDown,
+            "pause": self.pause,
+            "pauseAudio": self.pauseAudioProcess,
+            "delayUP": self.delayUP,
+            "delayDown": self.delayDown,
+            "audioDelayDown": self.audioDelayDown,
+            "audioDelayReset": self.audioDelayReset,
+            "audioDelayUp": self.audioDelayUp,
+            "clearVideoDelay": self.clearVideoDelay,
+            "nextBouquet": self.nextPlaylist,
+            "prevBouquet": self.prevPlaylist,
+            "fetchEPG": self.fetchEPG,  # new
+        }, -1)
+        
+        # Initialize variables
+        self.alsa = None
+        self.audioPaused = False
+        self.audio_process = None
+        self.radioList = []
+        self.currentDelaySeconds = 0
+        self.targetDelaySeconds = 0
+        self.countdownValue = 0
+        self.currentBitrate = None
+        
+        # Grid navigation
+        self.index = 0  # Current selected index in full list
+        self.page = 0   # Current page number
+        self.maxPages = 0
+        
+        if HAVE_EALSA:
+            self.alsa = eAlsaOutput.getInstance()
+        
+        # Initialize timers (same as list view)
+        self.timeShiftTimer = eTimer()
+        self.statusTimer = eTimer()
+        self.countdownTimer = eTimer()
+        self.bitrateCheckTimer = eTimer()
+        
+        try:
+            self.timeShiftTimer.callback.append(self.unpauseService)
+            self.statusTimer.callback.append(self.checkNetworkStatus)
+            self.countdownTimer.callback.append(self.updateCountdown)
+            self.bitrateCheckTimer.callback.append(self.checkAudioBitrate)
+        except:
+            self.timeShiftTimer_conn = self.timeShiftTimer.timeout.connect(self.unpauseService)
+            self.statusTimer_conn = self.statusTimer.timeout.connect(self.checkNetworkStatus)
+            self.countdownTimer_conn = self.countdownTimer.timeout.connect(self.updateCountdown)
+            self.bitrateCheckTimer_conn = self.bitrateCheckTimer.timeout.connect(self.checkAudioBitrate)
+        
+        self.lastservice = self.session.nav.getCurrentlyPlayingServiceReference()
+        
+        if config.plugins.IPStreamer.update.value:
+            self.checkupdates()
+
+        self.onLayoutFinish.append(self.loadFrame)
+        self.onShown.append(self.onWindowShow)
+
+    def loadFrame(self):
+        """Load selection frame image based on skin color"""
+        # Get frame path based on selected color
+        color = config.plugins.IPStreamer.skin.value  # orange, teal, lime or blue
+        frame_path = '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/frame_{}.png'.format(color)
+        
+        if fileExists(frame_path):
+            try:
+                self['frame'].instance.setPixmapFromFile(frame_path)
+                cprint("[IPStreamer] Frame loaded from: {}".format(frame_path))
+            except Exception as e:
+                cprint("[IPStreamer] Error loading frame: {}".format(str(e)))
+        else:
+            cprint("[IPStreamer] Frame image not found at: {}".format(frame_path))
+
+    def updateChannelInfo(self):
+        """Update channel name and EPG for current selection"""
+        try:
+            if self.radioList and self.index is not None and 0 <= self.index < len(self.radioList):
+                current = self.radioList[self.index]
+                channel_name = current[0]
+                self['channelname'].setText(channel_name)
+                
+                # FIXED EPG using grid's working method
+                epg_text = self.getEPGForChannel(channel_name)
+                self['epginfo'].setText(epg_text)
+                print(f"[DEBUG] {channel_name} -> EPG: {epg_text}")
+            else:
+                self['channelname'].setText("")
+                self['epginfo'].setText("No EPG")
+        except Exception as e:
+            print(f"[DEBUG] Error: {e}")
+            self['channelname'].setText("ERROR")
+            self['epginfo'].setText("No EPG")
+
+    def getEPGForChannel(self, channel_name):
+        """Get EPG using grid's existing helper function"""
+        try:
+            # Use the SAME EPG function grid already uses successfully!
+            chevents = buildEPGIndex()  # Build EPG cache
+            epg_title = findEPGTitleForAudioName(channel_name, chevents)
+            return epg_title[:60] + "..." if epg_title and len(epg_title) > 60 else epg_title or "No EPG"
+        except:
+            return "No EPG"
+
+    def downloadPicon(self):
+        """Yellow button - open picon provider choice"""
+        providers = [
+            ("zalata_audio", "zalata_audio"),
+            ("haitham_audio", "haitham_audio"), 
+            ("mohamed_audio", "mohamed_audio")
+        ]
+        self.session.openWithCallback(self.providerChoiceCallback, ChoiceBox, 
+            title="Select Picon Provider", list=providers)
+
+    def providerChoiceCallback(self, choice):
+        """Callback for provider selection - show grid/simple choice"""
+        if not choice:
+            return
+        self.selected_provider = choice[1]
+        picon_types = [
+            ("Download Grid Picon", "grid"),
+            ("Download Simple Picon", "simple")
+        ]
+        self.session.openWithCallback(self.piconTypeCallback, ChoiceBox, 
+            title=f"Select Picon Type for {self.selected_provider}", list=picon_types)
+
+    def piconTypeCallback(self, choice):
+        """Callback for picon type - start download"""
+        if not choice:
+            return
+        picon_type = choice[1]  # "grid" or "simple"
+        self.downloadPiconArchive(self.selected_provider, picon_type)
+
+    def downloadPiconArchive(self, provider, picon_type):
+        """Download and extract specific picon tar.gz - FIXED path handling"""
+        base_url = f"https://raw.githubusercontent.com/popking159/ipstreamer/main/{provider}"
+        filename = f"{picon_type}.tar.gz"
+        download_url = f"{base_url}/{filename}"
+        
+        # Target paths from config
+        if picon_type == "grid":
+            target_path = config.plugins.IPStreamer.piconPathGrid.value
+        else:
+            target_path = config.plugins.IPStreamer.piconPathSimple.value
+        
+        tmp_file = f"/tmp/{provider}_{filename}"
+        
+        try:
+            # Download tar.gz to /tmp/
+            import urllib.request
+            urllib.request.urlretrieve(download_url, tmp_file)
+            
+            # Ensure target directory exists
+            if not os.path.exists(target_path):
+                os.makedirs(target_path)
+            
+            # Clear existing picons in target path FIRST
+            for root, dirs, files in os.walk(target_path):
+                for file in files:
+                    if file.endswith('.png'):
+                        os.remove(os.path.join(root, file))
+            
+            # Extract tar.gz - FIXED: extract members one by one to target_path
+            import tarfile
+            with tarfile.open(tmp_file, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    if member.isfile() and member.name.endswith('.png'):
+                        # Extract PNG files only, directly to target_path (strip subdirs)
+                        member_path = os.path.join(target_path, os.path.basename(member.name))
+                        tar.makefile(member, member_path)
+            
+            # Clean up tmp file
+            os.remove(tmp_file)
+            
+            self.session.open(MessageBox, 
+                f"{picon_type.title()} picons for {provider} downloaded to {target_path}!", 
+                MessageBox.TYPE_INFO, timeout=5)
+            
+        except Exception as e:
+            self.session.open(MessageBox, 
+                f"Download failed: {str(e)}", 
+                MessageBox.TYPE_ERROR, timeout=5)
+
+    def downloadList(self):
+        """Blue button: download provider M3U and convert to IPStreamer JSON."""
+        choices = [
+            (_("Orange Audio"), "orange"),
+            (_("SATFamily Audio"), "satfamily"),
+        ]
+        self.session.openWithCallback(
+            self.downloadListChoice,
+            ChoiceBox,
+            title=_("Select list to download"),
+            list=choices
+        )
+
+    def downloadListChoice(self, choice):
+        if not choice:
+            return
+        provider = choice[1]
+
+        if provider == "orange":
+            base_name = "orange"
+            username = config.plugins.IPStreamer.orange_user.value.strip()
+            password = config.plugins.IPStreamer.orange_pass.value.strip()
+            if not username or not password:
+                self.session.open(
+                    MessageBox,
+                    _("Please enter Orange username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+
+        elif provider == "satfamily":
+            base_name = "satfamily"
+            username = config.plugins.IPStreamer.satfamily_user.value.strip()
+            password = config.plugins.IPStreamer.satfamily_pass.value.strip()
+            if not username or not password:
+                self.session.open(
+                    MessageBox,
+                    _("Please enter SatFamily username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+        else:
+            return
+
+        # Direct URL
+        if username.startswith("http://") or username.startswith("https://"):
+            m3u_urls = [(username, "direct")]
+        else:
+            m3u_urls = build_provider_url(provider, username, password)
+            if not m3u_urls:
+                self.session.open(
+                    MessageBox,
+                    _("Could not build playlist URL.\nCheck username/password."),
+                    MessageBox.TYPE_ERROR, timeout=5
+                )
+                return
+
+        last_error = None
+        m3u_text = None
+
+        for url, fmt in m3u_urls:
+            cprint("[IPStreamer] Trying %s URL (%s): %s" % (provider, fmt, url))
+            try:
+                m3u_text = simpleDownloadM3U(url)
+                cprint("[IPStreamer] %s M3U download OK using %s" % (provider, fmt))
+                break
+            except Exception as e:
+                last_error = str(e)
+                cprint("[IPStreamer] %s M3U download failed (%s): %s" % (provider, fmt, last_error))
+                m3u_text = None
+
+        if not m3u_text:
+            self.session.open(
+                MessageBox,
+                _("Download failed.\nLast error:\n%s") % (last_error or _("Unknown error")),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+            return
+
+        # Rest of your code unchanged
+        json_data, count = self.m3uToIPStreamerJson(m3u_text, base_name)
+        if count == 0:
+            self.session.open(
+                MessageBox,
+                _("No channels found in downloaded list."),
+                MessageBox.TYPE_INFO, timeout=5
+            )
+            return
+
+        json_data = self.applyProviderRenames(json_data, base_name)
+        out_dir = config.plugins.IPStreamer.settingsPath.value
+        try:
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir)
+            out_path = os.path.join(out_dir, "ipstreamer_%s.json" % base_name)
+            with open(out_path, "w") as f:
+                json.dump(json_data, f, indent=4)
+        except Exception as e:
+            self.session.open(
+                MessageBox,
+                _("Save failed:\n%s") % str(e),
+                MessageBox.TYPE_ERROR, timeout=5
+            )
+            return
+
+        msg = _("Download and conversion successful!\n\n"
+                "Provider: %s\n"
+                "Channels: %d\n"
+                "Saved to:\n%s") % (choice[0], count, out_path)
+        self.session.open(MessageBox, msg, MessageBox.TYPE_INFO, timeout=7)
+
+    def m3uToIPStreamerJson(self, m3u_text, base_name):
+        lines = m3u_text.splitlines()
+        playlist = []
+        last_name = None
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#EXTM3U"):
+                continue
+            if line.startswith("#EXTINF"):
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    last_name = parts[1].strip()
+            elif line.startswith("http://") or line.startswith("https://"):
+                url = line
+                if not last_name:
+                    continue
+                playlist.append({"channel": last_name, "url": url})
+                last_name = None
+
+        return {"playlist": playlist}, len(playlist)
+
+    def applyProviderRenames(self, json_data, base_name):
+        """
+        Apply simple name mapping rules per provider.
+        base_name: "orange" or "satfamily".
+        """
+        if "playlist" not in json_data:
+            return json_data
+
+        for ch in json_data["playlist"]:
+            name = ch.get("channel", "")
+
+            if base_name == "orange":
+                # Orange / Middle / Delay Audio → SPORTS
+                if "Orange Audio" in name:
+                    name = name.replace("Orange Audio", "Orange SPORTS")
+                if "Middle Audio" in name:
+                    name = name.replace("Middle Audio", "Middle SPORTS")
+                if "Delay Audio" in name:
+                    name = name.replace("Delay Audio", "Delay SPORTS")
+
+            elif base_name == "satfamily":
+                # SatFamily-4k-N / SatFamily-4k-XtraN → 4k SPORTS N / 4k SPORTS Xtra N
+                if name.startswith("SatFamily-4k-"):
+                    tail = name[len("SatFamily-4k-"):].strip()  # e.g. "1" or "Xtra1"
+
+                    if tail.lower().startswith("xtra"):
+                        # Xtra inside 4K: Xtra1 → Xtra 1
+                        suffix = tail[4:].strip()
+                        if suffix:
+                            tail = "Xtra %s" % suffix
+                        else:
+                            tail = "Xtra"
+
+                    name = "4k SPORTS %s" % tail
+
+                # SatFamily-N-VIP → VIP SPORTS N
+                if "SatFamily-" in name and "-VIP" in name:
+                    try:
+                        middle = name.split("SatFamily-")[1]  # "3-VIP"
+                        n = middle.split("-VIP")[0].strip()
+                        name = "VIP SPORTS %s" % n
+                    except Exception:
+                        pass
+
+                # SatFamily-N-Low / SatFamily-XtraN-Low → LOW SPORTS N / LOW SPORTS Xtra N
+                if "SatFamily-" in name and "-Low" in name:
+                    try:
+                        middle = name.split("SatFamily-")[1]  # "5-Low" or "Xtra1-Low"
+                        core = middle.split("-Low")[0].strip()  # "5" or "Xtra1"
+
+                        if core.lower().startswith("xtra"):
+                            suffix = core[4:].strip()
+                            if suffix:
+                                core = "Xtra %s" % suffix
+                            else:
+                                core = "Xtra"
+
+                        name = "LOW SPORTS %s" % core
+                    except Exception:
+                        pass
+
+            ch["channel"] = name
+
+        return json_data
+
+    def onWindowShow(self):
+        """Initialize grid on window show"""
+        self.onShown.remove(self.onWindowShow)
+        
+        # Load video delay
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        current_delay = config.plugins.IPStreamer.tsDelay.value
+        loaded_delay = getVideoDelayForChannel(current_service, fallback=current_delay)
+        config.plugins.IPStreamer.tsDelay.value = loaded_delay
+        self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+        
+        # Try to restore last position
+        if config.plugins.IPStreamer.lastidx.value:
+            try:
+                lastplaylist, lastchannel = map(int, config.plugins.IPStreamer.lastidx.value.split(','))
+                self.plIndex = lastplaylist
+                self.changePlaylist()
+                self.index = lastchannel
+                self.page = self.index // self.ITEMS_PER_PAGE
+                self.updateGrid()
+            except:
+                self.setPlaylist()
+        else:
+            self.setPlaylist()
+
+    def fetchEPG(self):
+        from .beinepg import fetch_and_build_simple_epg
+        try:
+            path = fetch_and_build_simple_epg()
+            self.session.open(
+                MessageBox,
+                _("beIN EPG updated:\n%s") % path,
+                MessageBox.TYPE_INFO,
+                timeout=3
+            )
+            # Rebuild playlist list so EPG titles appear
+            self.setPlaylist()
+        except Exception as e:
+            trace_error()
+            self.session.open(
+                MessageBox,
+                _("EPG fetch failed:\n%s") % str(e),
+                MessageBox.TYPE_ERROR,
+                timeout=5
+            )
+
+    def updateGrid(self):
+        """Update grid display for current page with separate name + event labels"""
+        # Build EPG index once per refresh (same as list view)
+        ch_events = buildEPGIndex()  # uses simple_epg.json
+
+        if not self.radioList:
+            # Clear all cells
+            for i in range(1, self.ITEMS_PER_PAGE + 1):
+                self['pixmap_{}'.format(i)].hide()
+                self['label_{}'.format(i)].setText('')
+                name_event = 'event_{}'.format(i)
+                if name_event in self:
+                    self[name_event].setText('')
+            return
+
+        total_items = len(self.radioList)
+        self.maxPages = (total_items + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE
+        start_idx = self.page * self.ITEMS_PER_PAGE
+        end_idx = min(start_idx + self.ITEMS_PER_PAGE, total_items)
+
+        default_picon = '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/default_grid_picon.png'
+
+        for i in range(self.ITEMS_PER_PAGE):
+            item_idx = start_idx + i
+            pixmap_widget = self['pixmap_{}'.format(i + 1)]
+            label_widget = self['label_{}'.format(i + 1)]
+            event_name = 'event_{}'.format(i + 1)
+            event_widget = self[event_name] if event_name in self else None
+
+            if item_idx < end_idx:
+                # Channel name
+                channel_name = str(self.radioList[item_idx][0])
+                label_widget.setText(channel_name)
+
+                # EPG title using same helper as simple list
+                epg_title = findEPGTitleForAudioName(channel_name, ch_events)
+                if event_widget is not None:
+                    event_widget.setText(epg_title or '')
+
+                # Picon (auto scaled by widget size)
+                picon_path = getPiconPathGrid(channel_name)
+                try:
+                    if picon_path and fileExists(picon_path):
+                        pixmap_widget.instance.setPixmapFromFile(picon_path)
+                        pixmap_widget.show()
+                    elif fileExists(default_picon):
+                        pixmap_widget.instance.setPixmapFromFile(default_picon)
+                        pixmap_widget.show()
+                    else:
+                        pixmap_widget.hide()
+                except Exception:
+                    pixmap_widget.hide()
+            else:
+                # Empty slot
+                pixmap_widget.hide()
+                label_widget.setText('')
+                if event_widget is not None:
+                    event_widget.setText('')
+
+        # Keep existing selection frame logic
+        self.paintFrame()
+        self.updateChannelInfo()    
+
+    def paintFrame(self):
+        """Move selection frame to current index"""
+        if not self.radioList:
+            return
+        
+        # Calculate position in grid (0-14)
+        grid_pos = self.index % self.ITEMS_PER_PAGE
+        
+        # Get position from positions array
+        pos_x, pos_y = self.positions[grid_pos]
+        
+        # Move frame with offset
+        self['frame'].moveTo(pos_x + self.frame_offset[0], pos_y + self.frame_offset[1], 1)
+        self['frame'].startMoving()
+
+    def nextPlaylist(self):
+        """Switch to next playlist (Channel Up button)"""
+        self.plIndex += 1
+        if self.plIndex >= len(self.choices):
+            self.plIndex = 0
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
+        self.changePlaylist()
+
+    def prevPlaylist(self):
+        """Switch to previous playlist (Channel Down button)"""
+        self.plIndex -= 1
+        if self.plIndex < 0:
+            self.plIndex = len(self.choices) - 1
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
+        self.changePlaylist()
+    
+    def gridRight(self):
+        """Move selection right"""
+        if not self.radioList:
+            return
+        
+        total_items = len(self.radioList)
+        
+        # Move to next item
+        if self.index < total_items - 1:
+            self.index += 1
+            
+            # Check if we need to change page
+            new_page = self.index // self.ITEMS_PER_PAGE
+            if new_page != self.page:
+                self.page = new_page
+                self.updateGrid()
+            else:
+                self.paintFrame()
+        else:
+            # Wrap to first item
+            self.index = 0
+            self.page = 0
+            self.updateGrid()
+        self.updateChannelInfo()
+    
+    def gridLeft(self):
+        """Move selection left"""
+        if not self.radioList:
+            return
+        
+        # Move to previous item
+        if self.index > 0:
+            self.index -= 1
+            
+            # Check if we need to change page
+            new_page = self.index // self.ITEMS_PER_PAGE
+            if new_page != self.page:
+                self.page = new_page
+                self.updateGrid()
+            else:
+                self.paintFrame()
+        else:
+            # Wrap to last item
+            self.index = len(self.radioList) - 1
+            self.page = self.index // self.ITEMS_PER_PAGE
+            self.updateGrid()
+        self.updateChannelInfo()
+        
+    def gridUp(self):
+        """Move selection up (5 items up in grid)"""
+        if not self.radioList:
+            return
+        
+        total_items = len(self.radioList)
+        
+        # Move up one row (5 items)
+        new_index = self.index - 5
+        
+        if new_index >= 0:
+            self.index = new_index
+        else:
+            # Wrap to bottom, same column
+            grid_col = self.index % 5
+            last_page_items = total_items % self.ITEMS_PER_PAGE
+            if last_page_items == 0:
+                last_page_items = self.ITEMS_PER_PAGE
+            
+            # Calculate bottom position in same column
+            self.index = total_items - (5 - grid_col)
+            if self.index < 0 or self.index >= total_items:
+                self.index = total_items - 1
+        
+        # Update page if needed
+        new_page = self.index // self.ITEMS_PER_PAGE
+        if new_page != self.page:
+            self.page = new_page
+            self.updateGrid()
+        else:
+            self.paintFrame()
+        self.updateChannelInfo()
+        
+    def gridDown(self):
+        """Move selection down (5 items down in grid)"""
+        if not self.radioList:
+            return
+        
+        total_items = len(self.radioList)
+        
+        # Move down one row (5 items)
+        new_index = self.index + 5
+        
+        if new_index < total_items:
+            self.index = new_index
+        else:
+            # Wrap to top, same column
+            grid_col = self.index % 5
+            self.index = grid_col
+        
+        # Update page if needed
+        new_page = self.index // self.ITEMS_PER_PAGE
+        if new_page != self.page:
+            self.page = new_page
+            self.updateGrid()
+        else:
+            self.paintFrame()
+        self.updateChannelInfo()
+    
+    def getHosts(self):
+        """Get all available playlists including custom categories"""
+        hosts = resolveFilename(SCOPE_PLUGINS, "Extensions/IPStreamer/hosts.json")
+        self.hosts = None
+        
+        if fileExists(hosts):
+            hosts = open(hosts, 'r').read()
+            self.hosts = json.loads(hosts, object_pairs_hook=OrderedDict)
+            for host in self.hosts:
+                yield host
+        
+        # Add custom playlist categories
+        custom_playlists = getPlaylistFiles()
+        for playlist in custom_playlists:
+            yield playlist['name']
+    
+    def setPlaylist(self):
+        """Load and display playlist"""
+        current = self.choices[self.plIndex]
+        
+        if current in self.hosts:
+            if current in ["Anis Sport"]:
+                self.getAnisUrls()
+                self['server'].setText(str(current))
+            else:
+                list = []
+                for cmd in self.hosts[current]['cmds']:
+                    list.append([cmd.split('|')[0], cmd.split('|')[1]])
+                
+                if len(list) > 0:
+                    self.radioList = list
+                    self['server'].setText(str(current))
+                    self.index = 0
+                    self.page = 0
+                    self.updateGrid()
+                else:
+                    self.radioList = []
+                    self['server'].setText('Playlist is empty')
+        else:
+            # Custom playlist
+            category_lower = current.lower()
+            playlist_file = getPlaylistDir() + 'ipstreamer_{}.json'.format(category_lower)
+            
+            if fileExists(playlist_file):
+                playlist = getPlaylist(playlist_file)
+                if playlist:
+                    list = []
+                    for channel in playlist['playlist']:
+                        try:
+                            list.append([str(channel['channel']), str(channel['url'])])
+                        except KeyError:
+                            pass
+                    
+                    if len(list) > 0:
+                        self.radioList = list
+                        self['server'].setText(current)
+                        self.index = 0
+                        self.page = 0
+                        self.updateGrid()
+                    else:
+                        self.radioList = []
+                        self['server'].setText('{} - Playlist is empty'.format(current))
+            else:
+                self.radioList = []
+                self['server'].setText('Playlist file not found')
+    
+    def changePlaylist(self):
+        """Change to next/previous playlist"""
+        if self.plIndex > len(self.choices) - 1:
+            self.plIndex = 0
+        if self.plIndex < 0:
+            self.plIndex = len(self.choices) - 1
+        
+        self.radioList = []
+        self.setPlaylist()
+    
+    def ok(self, long=False):
+        """Play selected channel"""
+        # Check if there are any items in the list
+        if not hasattr(self, 'radioList') or len(self.radioList) == 0:
+            self.session.open(MessageBox, _("Playlist is empty! Please add channels first."), MessageBox.TYPE_INFO, timeout=5)
+            return
+        
+        # Check if valid selection
+        if self.index is None or self.index < 0 or self.index >= len(self.radioList):
+            self.session.open(MessageBox, _("Please select a channel first."), MessageBox.TYPE_INFO, timeout=5)
+            return
+        
+        # Determine which player to use
+        if config.plugins.IPStreamer.player.value == "gst1.0-ipstreamer":
+            player_check = '/usr/bin/gst-launch-1.0'
+        else:
+            player_check = '/usr/bin/ffmpeg'
+        
+        if fileExists(player_check):
+            currentAudioTrack = 0
+            if long:
+                service = self.session.nav.getCurrentService()
+                if not service.streamed():
+                    currentAudioTrack = service.audioTracks().getCurrentTrack()
+                self.url = 'http://127.0.0.1:8001/{}'.format(self.lastservice.toString())
+                config.plugins.IPStreamer.lastplayed.value = "e2_service"
+            else:
+                try:
+                    self.url = self.radioList[self.index][1]
+                    config.plugins.IPStreamer.lastplayed.value = self.url
+                    config.plugins.IPStreamer.lastidx.value = '{},{}'.format(self.plIndex, self.index)
+                    config.plugins.IPStreamer.lastidx.save()
+                    
+                    # Save last audio channel
+                    config.plugins.IPStreamer.lastAudioChannel.value = self.url
+                    config.plugins.IPStreamer.lastAudioChannel.save()
+                    cprint("[IPStreamer] Saved last audio channel: {}".format(self.url))
+                except (IndexError, KeyError) as e:
+                    cprint("[IPStreamer] Error accessing radioList: {}".format(str(e)))
+                    self.session.open(MessageBox, _("Error selecting channel."), MessageBox.TYPE_ERROR, timeout=5)
+                    return
+            
+            if config.plugins.IPStreamer.player.value == "gst1.0-ipstreamer":
+                # GStreamer path via wrapper
+                delaysec = config.plugins.IPStreamer.audioDelay.value
+                vol_level = config.plugins.IPStreamer.volLevel.value
+
+                try:
+                    cmd = build_gst_cmd(
+                        url=self.url,
+                        delay_sec=delaysec,
+                        volume_level=vol_level,
+                    )
+                    self.runCmd(cmd)
+                except Exception as e:
+                    cprint("IPStreamer GStreamer build error: {}".format(str(e)))
+                    self.session.open(
+                        MessageBox,
+                        _("Cannot build GStreamer command!\n{}").format(str(e)),
+                        MessageBox.TYPE_ERROR,
+                        timeout=5,
+                    )
+                    return
+
+            else:
+                # FFmpeg command with audio delay AND volume
+                delaysec = config.plugins.IPStreamer.audioDelay.value
+                vol_level = config.plugins.IPStreamer.volLevel.value  # 1–100 from config
+                track = currentAudioTrack if currentAudioTrack > 0 else None
+
+                try:
+                    cmd = build_ffmpeg_cmd(
+                        url=self.url,
+                        delay_sec=delaysec,
+                        volume_level=vol_level,
+                        track_index=track,
+                    )
+                    self.runCmd(cmd)
+                except Exception as e:
+                    cprint("IPStreamer FFmpeg build error: {}".format(str(e)))
+                    self.session.open(
+                        MessageBox,
+                        "Cannot build FFmpeg command!\n{}".format(str(e)),
+                        MessageBox.TYPE_ERROR,
+                        timeout=5,
+                    )
+                    return
+            # NEW: Check bitrate after starting audio
+            # Wait 2 seconds for stream to stabilize, then check bitrate
+            self.currentBitrate = None
+            self.bitrateCheckTimer.start(2000, True)  # Single shot after 2 seconds
+        else:
+            self.session.open(MessageBox, _("Cannot play url, player is missing !!"), MessageBox.TYPE_ERROR, timeout=5)
+    
+    def pause(self):
+        """Activate TimeShift with smart delay calculation"""
+        if config.plugins.IPStreamer.running.value:
+            ts = self.getTimeshift()
+            
+            if ts is None:
+                return
+            
+            # Use real seconds directly (no conversion)
+            self.targetDelaySeconds = config.plugins.IPStreamer.tsDelay.value
+            
+            if not ts.isTimeshiftEnabled():
+                # First time activation - full delay
+                cprint("[IPStreamer] Starting TimeShift with {}s delay".format(self.targetDelaySeconds))
+                
+                ts.startTimeshift()
+                ts.activateTimeshift()
+                
+                delay_ms = int(self.targetDelaySeconds * 1000)
+                self.timeShiftTimer.start(delay_ms, False)
+                
+                # Start countdown
+                self.startCountdown(self.targetDelaySeconds)
+                self.currentDelaySeconds = self.targetDelaySeconds
+                
+            elif ts.isTimeshiftEnabled() and not self.timeShiftTimer.isActive():
+                # TimeShift already active - calculate difference
+                delay_difference = self.targetDelaySeconds - self.currentDelaySeconds
+                
+                if abs(delay_difference) < 0.5:  # Already at target (tolerance 0.5s)
+                    cprint("[IPStreamer] Already at target delay {}s".format(self.targetDelaySeconds))
+                    return
+                
+                if delay_difference > 0:
+                    # Need MORE delay - pause and wait for difference
+                    cprint("[IPStreamer] Increasing delay by {}s (from {}s to {}s)".format(
+                        delay_difference, self.currentDelaySeconds, self.targetDelaySeconds))
+                    
+                    service = self.session.nav.getCurrentService()
+                    pauseable = service.pause()
+                    if pauseable:
+                        pauseable.pause()
+                    
+                    # Only wait for the additional time needed
+                    additional_delay_ms = int(delay_difference * 1000)
+                    self.timeShiftTimer.start(additional_delay_ms, False)
+                    
+                    # Countdown for additional delay only
+                    self.startCountdown(delay_difference)
+                    self.currentDelaySeconds = self.targetDelaySeconds
+                    
+                else:
+                    # Need LESS delay - restart TimeShift with new delay
+                    cprint("[IPStreamer] Decreasing delay to {}s (was {}s)".format(
+                        self.targetDelaySeconds, self.currentDelaySeconds))
+                    
+                    ts.stopTimeshift()
+                    ts.startTimeshift()
+                    ts.activateTimeshift()
+                    
+                    delay_ms = int(self.targetDelaySeconds * 1000)
+                    self.timeShiftTimer.start(delay_ms, False)
+                    
+                    # Countdown for new delay
+                    self.startCountdown(self.targetDelaySeconds)
+                    self.currentDelaySeconds = self.targetDelaySeconds
+    
+    def delayUP(self):
+        """Increase TimeShift delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.tsDelay.value is None:
+            config.plugins.IPStreamer.tsDelay.value = 5
+        
+        if config.plugins.IPStreamer.tsDelay.value < 300:  # Max 300 seconds
+            config.plugins.IPStreamer.tsDelay.value += 1  # Add 1 second
+            config.plugins.IPStreamer.tsDelay.save()
+            
+            # Display in seconds
+            self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+            
+            # Save delay for current channel
+            current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+            saveVideoDelayForChannel(current_service, config.plugins.IPStreamer.tsDelay.value)
+    
+    def delayDown(self):
+        """Decrease TimeShift delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.tsDelay.value is None:
+            config.plugins.IPStreamer.tsDelay.value = 5
+        
+        if config.plugins.IPStreamer.tsDelay.value > 0:  # Min 0 seconds
+            config.plugins.IPStreamer.tsDelay.value -= 1  # Subtract 1 second
+            config.plugins.IPStreamer.tsDelay.save()
+            
+            # Display in seconds
+            self['sync'].setText('Video Delay: {}s'.format(config.plugins.IPStreamer.tsDelay.value))
+            
+            # Save delay for current channel
+            current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+            saveVideoDelayForChannel(current_service, config.plugins.IPStreamer.tsDelay.value)
+    
+    def audioDelayUp(self):
+        """Increase audio delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.audioDelay.value is None:
+            config.plugins.IPStreamer.audioDelay.value = 0
+        
+        if config.plugins.IPStreamer.audioDelay.value < 60:  # Max 60 seconds
+            config.plugins.IPStreamer.audioDelay.value += 1  # Add 1 second
+            config.plugins.IPStreamer.audioDelay.save()
+            self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+    
+    def audioDelayDown(self):
+        """Decrease audio delay by 1 second"""
+        # Safety check
+        if config.plugins.IPStreamer.audioDelay.value is None:
+            config.plugins.IPStreamer.audioDelay.value = 0
+        
+        if config.plugins.IPStreamer.audioDelay.value > -10:  # Min -10 seconds
+            config.plugins.IPStreamer.audioDelay.value -= 1  # Subtract 1 second
+            config.plugins.IPStreamer.audioDelay.save()
+            self['audio_delay'].setText('Audio Delay: {}s'.format(config.plugins.IPStreamer.audioDelay.value))
+    
+    def audioDelayReset(self):
+        """Reset audio delay to 0"""
+        config.plugins.IPStreamer.audioDelay.value = 0
+        config.plugins.IPStreamer.audioDelay.save()
+        self['audio_delay'].setText('Audio Delay: 0s')
+    
+    def resetAudio(self):
+        cprint("[IPStreamer] resetAudio called")
+        
+        # Stop status monitoring
+        if self.statusTimer.isActive():
+            self.statusTimer.stop()
+        # NEW: Stop bitrate check
+        if self.bitrateCheckTimer.isActive():
+            self.bitrateCheckTimer.stop()
+        
+        self.currentBitrate = None  # Clear bitrate        
+        # Kill audio process if running - aggressive approach
+        if self.audio_process:
+            try:
+                cprint("[IPStreamer] Terminating process PID: {}".format(self.audio_process.pid))
+                # Send SIGTERM first
+                self.audio_process.terminate()
+                try:
+                    self.audio_process.wait(timeout=1)
+                    cprint("[IPStreamer] Process terminated gracefully")
+                except subprocess.TimeoutExpired:
+                    # Force kill if still running
+                    cprint("[IPStreamer] Process not responding, force killing")
+                    self.audio_process.kill()
+                    self.audio_process.wait(timeout=1)
+                    cprint("[IPStreamer] Process force killed")
+                self.audio_process = None
+            except Exception as e:
+                cprint("[IPStreamer] Error killing process: {}".format(str(e)))
+                # Force kill using OS command as fallback
+                try:
+                    os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+                except:
+                    pass
+                self.audio_process = None
+        else:
+            # No process tracked, try to kill any running instances
+            cprint("[IPStreamer] No process tracked, killing all gst-launch and ffmpeg")
+            os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+        
+        # Kill container processes
+        if IPStreamerHandler.container.running():
+            IPStreamerHandler.container.kill()
+        
+        # Update status
+        self['network_status'].setText('')
+        
+        # Restore original audio and VIDEO
+        if not self.alsa:
+            if fileExists('/dev/dvb/adapter0/audio10') and not isMutable():
+                # Restore audio device
+                try:
+                    os.rename('/dev/dvb/adapter0/audio10', '/dev/dvb/adapter0/audio0')
+                    cprint("[IPStreamer] Audio device restored")
+                except:
+                    pass
+                
+                # IMPORTANT: Restart the service to restore VIDEO
+                self.session.nav.stopService()
+                self.restoreTimer = eTimer()
+                try:
+                    self.restoreTimer.callback.append(self.restoreService)
+                except:
+                    self.restoreTimer_conn = self.restoreTimer.timeout.connect(self.restoreService)
+                self.restoreTimer.start(100, True)
+            elif isMutable():
+                # For mutable boxes, just restart service to restore video
+                self.session.nav.stopService()
+                self.restoreTimer = eTimer()
+                try:
+                    self.restoreTimer.callback.append(self.restoreService)
+                except:
+                    self.restoreTimer_conn = self.restoreTimer.timeout.connect(self.restoreService)
+                self.restoreTimer.start(100, True)
+        
+        config.plugins.IPStreamer.running.value = False
+        config.plugins.IPStreamer.running.save()
+    
+    def runCmd(self, cmd):
+        """Execute audio command"""
+        cprint("[IPStreamer] runCmd called with: {}".format(cmd))
+        
+        if self.audio_process:
+            try:
+                self.audio_process.terminate()
+                try:
+                    self.audio_process.wait(timeout=1)
+                except:
+                    self.audio_process.kill()
+            except:
+                pass
+            self.audio_process = None
+        
+        if IPStreamerHandler.container.running():
+            IPStreamerHandler.container.kill()
+        
+        if self.alsa:
+            self.alsa.stop()
+            self.alsa.close()
+        else:
+            if not config.plugins.IPStreamer.keepaudio.value:
+                if fileExists('/dev/dvb/adapter0/audio0') and not isMutable():
+                    self.session.nav.stopService()
+                    try:
+                        os.rename('/dev/dvb/adapter0/audio0', '/dev/dvb/adapter0/audio10')
+                    except:
+                        pass
+                    self.session.nav.playService(self.lastservice)
+        
+        try:
+            self.audio_process = subprocess.Popen(
+                cmd,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            cprint("[IPStreamer] Process started with PID: {}".format(self.audio_process.pid))
+        except Exception as e:
+            cprint("[IPStreamer] ERROR starting process: {}".format(str(e)))
+            self.audio_process = None
+        
+        config.plugins.IPStreamer.running.value = True
+        config.plugins.IPStreamer.running.save()
+        
+        if not self.statusTimer.isActive():
+            self.statusTimer.start(2000)
+    
+    def checkNetworkStatus(self):
+        """Check if audio stream is still playing with bitrate info"""
+        if self.audio_process:
+            if self.audio_process.poll() is None:
+                if self.currentBitrate is not None:
+                    self['network_status'].setText('● Playing {}kb/s'.format(self.currentBitrate))
+                else:
+                    self['network_status'].setText('● Playing')
+            else:
+                self['network_status'].setText('✗ Stopped')
+                self.audio_process = None
+                self.currentBitrate = None
+        else:
+            self['network_status'].setText('')
+            self.currentBitrate = None
+    
+    def checkAudioBitrate(self):
+        """Check audio bitrate of current stream"""
+        if hasattr(self, 'url') and self.url and config.plugins.IPStreamer.running.value:
+            cprint("[IPStreamer] Checking bitrate for: {}".format(self.url))
+            bitrate = getAudioBitrate(self.url)
+            
+            if bitrate:
+                self.currentBitrate = bitrate
+                cprint("[IPStreamer] Detected bitrate: {} kb/s".format(bitrate))
+                if self.audio_process and self.audio_process.poll() is None:
+                    self['network_status'].setText('● Playing {}kb/s'.format(self.currentBitrate))
+            else:
+                self.currentBitrate = None
+        
+        self.bitrateCheckTimer.stop()
+    
+    def getTimeshift(self):
+        service = self.session.nav.getCurrentService()
+        return service and service.timeshift()
+    
+    def unpauseService(self):
+        self.timeShiftTimer.stop()
+        service = self.session.nav.getCurrentService()
+        pauseable = service.pause()
+        if pauseable:
+            pauseable.unpause()
+    
+    def startCountdown(self, seconds):
+        """Start countdown timer"""
+        if seconds > 0:
+            self.countdownValue = int(seconds)
+            self.countdownTimer.start(100, True)
+            self.updateCountdown()
+    
+    def updateCountdown(self):
+        """Update countdown display every second"""
+        if self.countdownValue > 0:
+            self['countdown'].setText('TimeShift: {}s'.format(self.countdownValue))
+            self.countdownValue -= 1
+            self.countdownTimer.start(1000, True)
+        else:
+            self['countdown'].setText('')
+            self.countdownTimer.stop()
+    
+    def pauseAudioProcess(self):
+        if config.plugins.IPStreamer.running.value and IPStreamerHandler.container.running():
+            pid = IPStreamerHandler.container.getPID()
+            if not self.audioPaused:
+                cmd = "kill -STOP {}".format(pid)
+                self.audioPaused = True
+            else:
+                cmd = "kill -CONT {}".format(pid)
+                self.audioPaused = False
+            eConsoleAppContainer().execute(cmd)
+    
+    def showInfo(self):
+        """Open info/about screen"""
+        self.session.open(IPStreamerInfo)
+    
+    def showHelp(self):
+        """Open help screen"""
+        self.session.open(IPStreamerHelp)
+    
+    def openConfig(self):
+        """Open settings screen"""
+        self.session.open(IPStreamerSetup)
+    
+    def clearVideoDelay(self):
+        """Clear saved video delay for current channel"""
+        current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+        if current_service:
+            ref_str = current_service.toString()
+            data = loadVideoDelayData()
+            if ref_str in data:
+                del data[ref_str]
+                saveVideoDelayData(data)
+                cprint("[IPStreamer] Cleared saved delay for channel: {}".format(ref_str))
+                self.session.open(MessageBox, _("Video delay cleared for this channel"), MessageBox.TYPE_INFO, timeout=3)
+            else:
+                self.session.open(MessageBox, _("No saved delay for this channel"), MessageBox.TYPE_INFO, timeout=3)
+    
+    def restoreService(self):
+        """Restore video service after short delay"""
+        cprint("[IPStreamer] Restoring service")
+        self.session.nav.playService(self.lastservice)
+    
+    def getAnisUrls(self):
+        """Fetch Anis playlist from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_anis.json"
+        self.callUrl(url, self.parseAnisData)
+    
+    def parseAnisData(self, data):
+        """Parse Anis JSON data from GitHub"""
+        try:
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+            playlist_data = json.loads(data)
+            list = []
+            if 'playlist' in playlist_data:
+                for channel in playlist_data['playlist']:
+                    try:
+                        list.append([str(channel['channel']), str(channel['url'])])
+                    except KeyError:
+                        pass
+            
+            if len(list) > 0:
+                self.radioList = list
+                self['server'].setText('Anis Sport')
+                self.index = 0
+                self.page = 0
+                self.updateGrid()
+            else:
+                self.radioList = []
+                self['server'].setText('Anis Sport - Playlist is empty')
+        except Exception as e:
+            cprint("[IPStreamer] Error parsing Anis data: {}".format(str(e)))
+            self.radioList = []
+            self['server'].setText('Error loading Anis Sport')
+
+    def installupdate(self, answer=False):
+        """Install update from GitHub"""
+        if answer:
+            url = "https://raw.githubusercontent.com/popking159/ipstreamer/main/installer-ipstreamer.sh"
+            cmdlist = []
+            cmdlist.append('wget -q --no-check-certificate {} -O - | bash'.format(url))
+            self.session.open(
+                Console2, 
+                title="Update IPStreamer", 
+                cmdlist=cmdlist, 
+                closeOnSuccess=False
+            )
+    
+    def callUrl(self, url, callback):
+        try:
+            from twisted.web.client import getPage
+            getPage(str.encode(url), headers={b'Content-Type': b'application/x-www-form-urlencoded'}).addCallback(callback).addErrback(self.addErrback)
+        except:
+            pass
+    
+    def addErrback(self, error=None):
+        pass
+    
+    def checkupdates(self):
+        """Check for plugin updates from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/main/installer-ipstreamer.sh"
+        self.callUrl(url, self.checkVer)
+    
+    def checkVer(self, data):
+        """Parse version from installer script"""
+        try:
+            if PY3:
+                data = data.decode('utf-8')
+            else:
+                data = data.encode('utf-8')
+            
+            if data:
+                lines = data.split('\n')
+                self.newversion = None
+                self.newdescription = ""
+                
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('version='):
+                        # Extract version: version="8.1"
+                        self.newversion = line.split('=')[1].strip('"').strip("'")
+                    elif line.startswith('description='):
+                        # Extract description: description="New features"
+                        self.newdescription = line.split('=')[1].strip('"').strip("'")
+                
+                if self.newversion:
+                    cprint("[IPStreamer] Current version: {}, New version: {}".format(Ver, self.newversion))
+                    
+                    # Compare versions
+                    try:
+                        current = float(Ver)
+                        new = float(self.newversion)
+                        
+                        if new > current:
+                            msg = "New version {} is available.\n\n{}\n\nDo you want to install it now?".format(
+                                self.newversion, 
+                                self.newdescription
+                            )
+                            self.session.openWithCallback(
+                                self.installupdate, 
+                                MessageBox, 
+                                msg, 
+                                MessageBox.TYPE_YESNO
+                            )
+                    except ValueError:
+                        cprint("[IPStreamer] Could not compare versions")
+        except Exception as e:
+            cprint("[IPStreamer] Error checking version: {}".format(str(e)))
+            trace_error()
+    
+    def exit(self, ret=False):
+        """Exit IPStreamer plugin"""
+        cprint("[IPStreamer] exit() called")
+        
+        # Stop all timers
+        
+        if self.statusTimer.isActive():
+            self.statusTimer.stop()
+        
+        if self.bitrateCheckTimer.isActive():
+            self.bitrateCheckTimer.stop()
+        
+        # Save current position
+        if len(self.radioList) > 0:
+            config.plugins.IPStreamer.lastidx.value = '{},{}'.format(self.plIndex, self.index)
+            config.plugins.IPStreamer.lastidx.save()
+        
+        # Just close the plugin GUI - audio continues
+        if ret and not self.timeShiftTimer.isActive():
+            self.close()
+        else:
+            self.close()
+
+
+class IPStreamerPlaylist(IPStreamerScreen):
+
+    def __init__(self, session):
+        IPStreamerScreen.__init__(self, session)
+        
+        # REPLACE/ADD THIS SECTION (after IPStreamerScreen.__init__):
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerPlaylist_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerPlaylist_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerPlaylist_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerPlaylist_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerPlaylist_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerPlaylist_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerPlaylist_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerPlaylist_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerPlaylist_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerPlaylist_ORANGE_FHD
+        
+        self["key_green"] = Button(_("Remove Link"))
+        self["key_red"] = Button(_("Reset Playlist"))
+        self["IPStreamerAction"] = ActionMap(["IPStreamerActions"],
+        {
+            "cancel": self.exit,
+            "green": self.keyGreen,
+            "red": self.keyRed,
+        }, -1)
+        self.onLayoutFinish = []
+        self.onShown = []
+        self.loadPlaylist()
+
+    def loadPlaylist(self):
+        playlist = getPlaylist()
+        if playlist:
+            list = []
+            for channel in playlist['playlist']:
+                try:
+                    list.append((str(channel['channel']), str(channel['url'])))
+                except KeyError:
+                    pass
+            if len(list) > 0:
+                self["list"].l.setList(self.iniMenu(list))
+                self["server"].setText('Custom Playlist')
+            else:
+                self["list"].hide()
+                self["server"].setText('Playlist is empty')
+        else:
+            self["list"].hide()
+            self["server"].setText('Cannot load playlist')
+
+    def keyRed(self):
+        playlist = getPlaylist()
+        if playlist:
+            playlist['playlist'] = []
+            with open("/etc/enigma2/ipstreamer.json", 'w')as f:
+                json.dump(playlist, f, indent=4)
+            self.loadPlaylist()
+
+    def keyGreen(self):
+        playlist = getPlaylist()
+        if playlist:
+            if len(playlist['playlist']) > 0:
+                index = self['list'].getSelectionIndex()
+                currentPlaylist = playlist["playlist"]
+                del currentPlaylist[index]
+                playlist['playlist'] = currentPlaylist
+                with open("/etc/enigma2/ipstreamer.json", 'w')as f:
+                    json.dump(playlist, f, indent=4)
+                self.loadPlaylist()
+
+    def exit(self):
+        self.close()
+
+class IPStreamerInfo(Screen):
+    """Info/About screen"""
+    
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        
+        # Select skin based on resolution and color
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerInfo_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerInfo_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerInfo_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerInfo_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerInfo_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerInfo_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerInfo_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerInfo_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerInfo_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerInfo_ORANGE_FHD
+        
+        self.skinName = "IPStreamerInfo"
+        
+        self["info_text"] = Label()
+        self["key_red"] = Button(_("Close"))
+        
+        self["actions"] = ActionMap(["ColorActions", "OkCancelActions"],
+            {
+                "cancel": self.close,
+                "red": self.close,
+                "ok": self.close,
+            }, -1)
+        
+        self.onLayoutFinish.append(self.showInfo)
+    
+    def showInfo(self):
+        """Display plugin information"""
+        info = """
+IPStreamer v{}
+
+Original Developer
+ZIKO
+
+Maintainer
+popking159
+
+Enjoy FREE Enigma2 world!
+
+
+Press OK or RED to close
+        """.format(Ver)
+        
+        self["info_text"].setText(info.strip())
+
+class IPStreamerHelp(Screen):
+    """Help screen with scrollable content"""
+    
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        
+        # Select skin based on resolution and color
+        if isHD():
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerHelp_ORANGE_HD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerHelp_TEAL_HD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerHelp_LIME_HD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerHelp_BLUE_HD
+            else:
+                self.skin = SKIN_IPStreamerHelp_ORANGE_HD
+        else:
+            if config.plugins.IPStreamer.skin.value == 'orange':
+                self.skin = SKIN_IPStreamerHelp_ORANGE_FHD
+            elif config.plugins.IPStreamer.skin.value == 'teal':
+                self.skin = SKIN_IPStreamerHelp_TEAL_FHD
+            elif config.plugins.IPStreamer.skin.value == 'lime':
+                self.skin = SKIN_IPStreamerHelp_LIME_FHD
+            elif config.plugins.IPStreamer.skin.value == 'blue':
+                self.skin = SKIN_IPStreamerHelp_BLUE_FHD
+            else:
+                self.skin = SKIN_IPStreamerHelp_ORANGE_FHD
+        
+        self.skinName = "IPStreamerHelp"
+        
+        # Use ScrollLabel for scrollable text instead of List
+        from Components.ScrollLabel import ScrollLabel
+        self["help_text"] = ScrollLabel()
+        self["key_red"] = Button(_("Close"))
+        
+        self["actions"] = ActionMap(["ColorActions", "OkCancelActions", "DirectionActions"],
+            {
+                "cancel": self.close,
+                "red": self.close,
+                "ok": self.close,
+                "up": self["help_text"].pageUp,
+                "down": self["help_text"].pageDown,
+                "pageUp": self["help_text"].pageUp,
+                "pageDown": self["help_text"].pageDown,
+            }, -1)
+        
+        self.onLayoutFinish.append(self.showHelp)
+    
+    def showHelp(self):
+        """Display updated help as scrollable text"""
+        help_text = """IPStreamer Help
+
+    BASIC CONTROLS
+    • OK: Play selected channel
+    • LEFT/RIGHT: Switch categories (List mode)
+    • NEXT/PREV: Switch categories (Grid mode)
+    • UP/DOWN: Navigate channels
+    • EXIT: Close plugin (audio continues)
+
+    AUDIO CONTROLS (during playback)
+    • GREEN: Stop/Reset audio
+    • 7: Decrease Audio delay (-1s)
+    • 9: Increase Audio delay (+1s)
+    • 8: Reset Audio delay (0s)
+    • Range: -10s to +60s (GStreamer/FFmpeg)
+
+    VIDEO SYNC (with live TV)
+    • PAUSE: Activate TimeShift
+    • CH+: Increase Video delay (+1s)
+    • CH-: Decrease Video delay (-1s)
+    • Range: 0s to +300s
+
+    SETTINGS (MENU button)
+    • Skin: Orange/Teal/Lime/Blue
+    • Player: GStreamer 1.0 / FFmpeg
+    • Audio Sink: alsasink/osssink/autoaudiosink
+    • Volume: 1-100 (external links)
+    • Equalizer: Bass/Treble/Vocal/Rock/Pop/Classic/Jazz
+    • Mute: Force DVB audio mute hack
+    • Picons: Grid(200x120) or List(110x56)
+    • Updates/EPG Timezone/Credentials
+
+    WEB INTERFACE
+    • URL: http://box-ip:8080/ipstreamer
+    • Mobile-friendly drag & drop
+    • Add/Edit/Delete channels
+    • Unlimited categories (separate JSON files)
+    • Auto-reload on changes
+
+    BUTTONS
+    • RED: Exit plugin
+    • GREEN: Reset audio
+    • YELLOW: Download Picons from many providers
+    • BLUE: Download audio list from many providers
+    • Menu: Plugin settings
+    • EPG: Download EPG from beIN official site
+    • INFO: Plugin info
+    • HELP: Plugin help
+
+    GRID MODE
+    • Picons: 200x120 pixels
+    • Navigation: NEXT/PREV for categories
+    • Better for HD screens
+
+    EPG SUPPORT
+    • EPG button: Download 10:00AM today → 09:59AM tomorrow
+    • Channel names MUST contain 'SPORTS' for EPG linking
+
+    TIPS & TROUBLESHOOTING
+    • Audio delay ≈ stream sync (not exact due to buffering)
+    • Video delay = live TV sync
+    • Playlists: /etc/enigma2/ipstreamer/*.json and manu other paths
+    • ALSA: Check /etc/asound.conf for custom routing
+    • Mute hack: Enable for boxes with audio conflicts
+    • Logs: Check /tmp for gst-launch/ffmpeg output
+
+    ↑↓ Page Up/Down | RED/EXIT Close"""
+        
+        self["help_text"].setText(help_text)
+
+class IPStreamerHandler(Screen):
+    container = eConsoleAppContainer()
+    
+    def __init__(self, session):
+        Screen.__init__(self, session)
+        self.session = session
+        
+        # Track service events including channel changes
+        ServiceEventTracker(screen=self, eventmap={
+            iPlayableService.evEnd: self.evEnd,
+            iPlayableService.evStopped: self.evEnd,
+            iPlayableService.evStart: self.evServiceChanged,  # Detects channel change
+        })
+
+    # --- PATCH: crash-safe service restore (debounced, deferred) ---
+
+    def _ensureRestoreTimer(self):
+        from enigma import eTimer
+        if getattr(self, "_restoreTimer", None) is None:
+            self._restoreTimer = eTimer()
+            try:
+                self._restoreTimer.callback.append(self._restoreTimerRouter)
+            except Exception:
+                self._restoreTimer_conn = self._restoreTimer.timeout.connect(self._restoreTimerRouter)
+
+    def _restoreTimerRouter(self):
+        # route between stage1 and stage2
+        if getattr(self, "_restoreStage", 0) == 0:
+            self._restoreStage = 1
+            self._doDeferredRestore()
+        else:
+            self._restoreStage = 0
+            self._doDeferredRestore2()
+
+    def _scheduleSafeRestore(self, reason=""):
+        # Debounce: prevent multiple restarts during a zap storm
+        if getattr(self, "_restoreInProgress", False):
+            return
+
+        self._restoreInProgress = True
+        self._ensureRestoreTimer()
+
+        # Capture the service we *intend* to restore (may change during zap)
+        try:
+            self._restoreServiceRef = self.session.nav.getCurrentlyPlayingServiceReference()
+        except Exception:
+            self._restoreServiceRef = None
+
+        # Give Enigma2 time to finish tearing down/setting up DVB service
+        # 100ms is often too low on some boxes/images -> use 600ms
+        self._restoreTimer.start(600, True)
+
+    def _doDeferredRestore(self):
+        # Always clear flag first to avoid deadlock if something throws
+        self._restoreInProgress = False
+
+        # Stop timers that might still fire while we touch nav/service
+        try:
+            if getattr(self, "statusTimer", None) and self.statusTimer.isActive():
+                self.statusTimer.stop()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "bitrateCheckTimer", None) and self.bitrateCheckTimer.isActive():
+                self.bitrateCheckTimer.stop()
+        except Exception:
+            pass
+
+        # Only restore if the stored ref is still sane
+        serviceref = getattr(self, "_restoreServiceRef", None)
+        if not serviceref:
+            return
+
+        # If user already zapped again, skip restoring old ref
+        try:
+            current = self.session.nav.getCurrentlyPlayingServiceReference()
+            if current and current.toString() != serviceref.toString():
+                return
+        except Exception:
+            # If comparison fails, be conservative: don't touch nav
+            return
+
+        # Avoid stopService() from inside event callback context;
+        # at this point we are in timer context, safer.
+        try:
+            self.session.nav.stopService()
+        except Exception:
+            pass
+
+        # Restart service after a little more delay
+        self._ensureRestoreTimer()
+        self._restoreServiceRef2 = serviceref
+        self._restoreTimer.start(400, True)
+
+    def _doDeferredRestore2(self):
+        # second stage playService
+        serviceref = getattr(self, "_restoreServiceRef2", None)
+        if not serviceref:
+            return
+        try:
+            self.session.nav.playService(serviceref)
+        except Exception:
+            pass
+    
+    def stopIPStreamer(self):
+        """Stop IPStreamer playback"""
+        cprint("[IPStreamer] stopIPStreamer called")
+        if self.container.running():
+            self.container.kill()
+    
+    def evServiceChanged(self):
+        # Called when service changes (zap) - restore audio/video safely
+        cprint("[IPStreamer] Service changed - stopping external audio and restoring original")
+
+        # Stop external audio FIRST (kill ffmpeg/gst/container), but do NOT touch nav here
+        try:
+            self.stopIPStreamer()
+        except Exception:
+            pass
+
+        # Defer any nav stop/play to timer context to avoid Enigma2 race/segfault
+        self._scheduleSafeRestore("zap")
+        
+        # Stop external audio when user changes channel
+        if config.plugins.IPStreamer.running.value:
+            cprint("[IPStreamer] Channel changed - restoring original audio/video")
+            
+            # Kill container processes
+            if self.container.running():
+                self.container.kill()
+            
+            # Kill any running audio processes
+            os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+            
+            # For mutable boxes - restore audio device
+            if fileExists("/dev/dvb/adapter0/audio10"):
+                try:
+                    os.rename("/dev/dvb/adapter0/audio10", "/dev/dvb/adapter0/audio0")
+                    cprint("[IPStreamer] Audio device restored")
+                except:
+                    pass
+            
+            # Restart the current service to restore both audio AND video
+            current_service = self.session.nav.getCurrentlyPlayingServiceReference()
+            if current_service:
+                cprint("[IPStreamer] Restarting service to restore audio/video")
+                self.session.nav.stopService()
+                
+                # Use timer to restart service after short delay
+                from enigma import eTimer
+                self.restoreTimer = eTimer()
+                try:
+                    self.restoreTimer.callback.append(lambda: self.restoreService(current_service))
+                except:
+                    self.restoreTimer_conn = self.restoreTimer.timeout.connect(lambda: self.restoreService(current_service))
+                self.restoreTimer.start(100, True)  # 100ms delay
+            
+            # Update running status
+            config.plugins.IPStreamer.running.value = False
+            config.plugins.IPStreamer.running.save()
+            
+            # Unmute if using ALSA
+            if HAVE_EALSA:
+                try:
+                    alsa = eAlsaOutput.getInstance()
+                    alsa.setMute(False)
+                    cprint("[IPStreamer] ALSA unmuted")
+                except:
+                    pass
+    
+    def restoreService(self, service_ref):
+        """Restore the service after stopping external audio"""
+        cprint("[IPStreamer] Restoring service: {}".format(service_ref.toString()))
+        self.session.nav.playService(service_ref)
+    
+    def evEnd(self):
+        """Called when service ends or stops"""
+        cprint("[IPStreamer] Service ended")
+        
+        # Only clean up if we were playing external audio
+        if config.plugins.IPStreamer.running.value:
+            if not config.plugins.IPStreamer.keepaudio.value:
+                cprint("[IPStreamer] Cleaning up audio on service end")
+                self.stopIPStreamer()
+                os.system("killall -9 gst-launch-1.0 ffmpeg 2>/dev/null")
+                
+                # Restore audio device for mutable boxes
+                if fileExists("/dev/dvb/adapter0/audio10"):
+                    try:
+                        os.rename("/dev/dvb/adapter0/audio10", "/dev/dvb/adapter0/audio0")
+                    except:
+                        pass
+                
+                config.plugins.IPStreamer.running.value = False
+                config.plugins.IPStreamer.running.save()
+
+class IPStreamerLauncher():
+
+    def __init__(self, session):
+        self.session = session
+
+    def gotSession(self):
+        keymap = resolveFilename(SCOPE_PLUGINS, "Extensions/IPStreamer/keymap.xml")
+        readKeymap(keymap)
+        globalActionMap.actions['IPStreamerSelection'] = self.ShowHide
+
+    def ShowHide(self):
+        if not isinstance(self.session.current_dialog, IPStreamerScreen):
+            self.session.open(IPStreamerScreen)
+
+
+# Add at the end of the file, in sessionstart() function:
+
+def sessionstart(reason, session=None, **kwargs):
+    if reason == 0:
+        IPStreamerHandler(session)
+        IPStreamerLauncher(session).gotSession()
+        
+        # Start web interface
+        try:
+            from Plugins.Extensions.IPStreamer.webif import startWebInterface
+            from twisted.internet import reactor
+            
+            # Use callLater to ensure reactor is running
+            reactor.callLater(2, startWebInterface)
+        except Exception as e:
+            print("[IPStreamer] Could not start web interface: {}".format(e))
+            import traceback
+            traceback.print_exc()
+
+def main(session, **kwargs):
+    """Main entry point - choose view mode based on settings"""
+    if config.plugins.IPStreamer.viewMode.value == "grid":
+        session.open(IPStreamerScreenGrid)
+    else:
+        session.open(IPStreamerScreen)
+
+
+def showInmenu(menuid, **kwargs):
+    if menuid == "mainmenu":
+        return [("IPStreamer", main, "IPStreamer", 1)]
+    else:
+        return []
+
+
+def Plugins(**kwargs):
+    Descriptors = []
+    Descriptors.append(PluginDescriptor(where=[PluginDescriptor.WHERE_SESSIONSTART], fnc=sessionstart))
+    if config.plugins.IPStreamer.mainmenu.value:
+        Descriptors.append(PluginDescriptor(where=[PluginDescriptor.WHERE_MENU], fnc=showInmenu))
+    Descriptors.append(PluginDescriptor(name="IPStreamer", description="Listen to your favorite commentators", icon="logo.png", where=PluginDescriptor.WHERE_PLUGINMENU, fnc=main))
+    return Descriptors

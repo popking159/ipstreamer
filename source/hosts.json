@@ -1,0 +1,64 @@
+{
+    "Anis Sport": {
+        "cmds": []
+    },
+    "World Radio": {
+        "cmds": [
+            "BBC World Service|http://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+            "CNN|http://tunein.streamguys1.com/cnn",
+            "NPR|http://npr-ice.streamguys1.com/live.mp3"
+        ]
+    },
+    "Local Radio": {
+        "cmds": [
+            "On Sport FM|https://carina.streamerr.co:2020/stream/OnSportFM",
+            "Radio HITS|https://radiohits882.radioca.st/;",
+            "Nagham FM|https://ahmsamir.radioca.st/stream",
+			"Nogoom FM|https://audio.nrpstream.com/listen/nogoumfm/radio.mp3",
+			"Mega FM|https://megafm927.radioca.st/stream",
+			"Radio 9090|http://9090streaming.mobtada.com/9090FMEGYPT",
+			"Nile FM|https://audio.nrpstream.com/listen/nile_fm/radio.mp3",
+			"Diab FM|https://stream.zeno.fm/xa4yhh4k838uv",
+			"Elissa FM|https://stream.zeno.fm/v7n499m8ckhvv",
+			"Shaaby FM|http://radio95.radioca.st:9010/stream"
+        ]
+    },
+    "Quran Kareem": {
+        "cmds": [
+            "Quran Kareem|https://stream.radiojar.com/8s5u5tpdtwzuv",
+			"ALmenshawy|https://qurango.net/radio/mohammed_siddiq_alminshawi",
+			"Mishary Rashid Alafasy|https://qurango.net/radio/mishary_alafasi",
+			"Maher Al-Mu'aiqly|https://backup.qurango.net/radio/maher",
+			"Abdulbasit Abdulsamad WARSH|https://qurango.net/radio/abdulbasit_abdulsamad_warsh",
+			"Abdulbasit Abdulsamad MOJAWWAD|https://qurango.net/radio/abdulbasit_abdulsamad_mojawwad",
+			"Saad Alghamdi|https://qurango.net/radio/saad_alghamdi",
+			"Yasser Aldosari|https://qurango.net/radio/yasser_aldosari",
+			"Alhussary|https://qurango.net/radio/mahmoud_khalil_alhussary"
+        ]
+    },
+    "Arabic Audio": {
+        "cmds": [
+            "Mfm mahdia|https://mfmtunisie.toutech.net/mfmlive",
+			"mosaique fm|https://radio.mosaiquefm.net/mosalive",
+			"jawhara fm|https://streaming2.toutech.net/jawharafm",
+			"radio sfax|https://mytuner-radio.com/fr/radio/mfm-tunisie-432414/",
+			"radio med|http://stream6.tanitweb.com/radiomed",
+			"mosaique fmtarab|https://radio.mosaiquefm.net/mosatarab",
+			"radio tunisienne|http://rtstream.tanitweb.com/nationale",
+			"radio monastir|http://rtstream.tanitweb.com/monastir",
+			"mosaique fm-tounsi|https://radio.mosaiquefm.net/mosatounsi",
+			"shems fm|http://radio.mosaiquefm.net:8000/mosatarab",
+			"knooz fm|http://streaming.knoozfm.net:8000/knoozfm",
+			"mosaique fm-gold|https://radio.mosaiquefm.net/mosagold",
+			"diwan fm|https://streaming.diwanfm.net/stream",
+			"radio ulysse|http://51.178.31.38:8000/stream",
+			"Karama FM|https://hosting.studioradiomedia.fr:2685/stream?fbclid=IwAR3rg3mLhsj-VwurHnhc4oOJMWyHbflJCxi5lDY-KIER_ryFIdoxpuWD7Eo",
+			"ambiance fm|https://stream.zeno.fm/0rehsamc9xxtv",
+			"Babnet Tunisie|https://radio.babnet.net/?type=https",
+			"radio misk|https://live.misk.art/stream",
+			"radio gafsa|http://rtstream.tanitweb.com/gafsa",
+			"zitouna fm|https://stream.radiozitouna.tn/radio/8030/radio.mp3",
+			"radio nationale|http://rtstream.tanitweb.com/nationale"
+        ]
+    }
+}

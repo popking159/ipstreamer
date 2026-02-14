@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 IPStreamer Web Interface for Multi-Category Playlist Management
-Access at: http://box-ip:8080/ipstreamer
+Access at: http://box-ip:6688/ipstreamer
 """
 from Components.config import config
 from Plugins.Extensions.IPStreamer.plugin import getPlaylistDir
@@ -802,9 +802,9 @@ def startWebInterface():
         _webif_root = root
         
         site = server.Site(root)
-        reactor.listenTCP(8080, site, interface='0.0.0.0')
+        reactor.listenTCP(6688, site, interface='0.0.0.0')
         
-        print("[IPStreamer WebIF] Started on http://0.0.0.0:8080/ipstreamer")
+        print("[IPStreamer WebIF] Started on http://0.0.0.0:6688/ipstreamer")
         return True
     except Exception as e:
         print("[IPStreamer WebIF] Error: {}".format(e))

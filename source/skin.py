@@ -69,7 +69,7 @@ def getSkinFHD(color_scheme):
         <eLabel name="" position="1,1" size="1388,758" zPosition="-2" backgroundColor="{bg}" />
         
         <!-- Title -->
-        <widget name="title" position="1164,30" size="200,60" font="Regular;30" foregroundColor="{primary}" backgroundColor="{bg}" halign="center" valign="center" transparent="0" />
+        <widget name="title" position="1018,25" size="362,40" font="Regular;30" foregroundColor="{primary}" backgroundColor="{bg}" halign="center" valign="center" transparent="0" />
         
         <!-- Header -->
         <widget name="server" position="20,20" size="640,50" font="Regular;32" foregroundColor="#000000" backgroundColor="{primary}" halign="center" valign="center" transparent="0" />
@@ -455,7 +455,7 @@ def getGridSkinFHD(color_scheme):
     return """
     <screen name="IPStreamerScreenGrid" position="80,24" size="1730,1020" title="IPStreamer Grid" backgroundColor="#20383636" flags="wfNoBorder">
     <!-- Header -->
-    <widget name="title" position="1438,10" size="270,50" font="Regular;40" foregroundColor="#FFA500" transparent="1" halign="left" />
+    <widget name="title" position="1343,15" size="362,40" font="Regular;30" foregroundColor="{primary}" halign="center" valign="center" transparent="1" />
     <widget name="server" position="90,10" size="600,50" font="Regular;38" foregroundColor="#FFFFFF" transparent="1" halign="left" />
     <widget name="sync" position="830,120" size="250,40" font="Regular;28" foregroundColor="#00FF00" transparent="1" halign="left" />
     <widget name="audio_delay" position="1100,120" size="250,40" font="Regular;24" foregroundColor="#00FFFF" transparent="1" halign="left" />

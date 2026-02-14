@@ -1,5 +1,5 @@
 # =====================================================
-#   IPStreamer V1.00   |   Developed by Ziko
+#   IPStreamer v1.10   |   Developed by Ziko
 #                   |   Maintained by MNASR
 # =====================================================
 
@@ -2139,13 +2139,13 @@ class IPStreamerScreen(Screen):
         except:
             pass
 
-    def getAnisUrls(self):
-        """Fetch Anis playlist from GitHub"""
-        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_anis.json"
-        self.callUrl(url, self.parseAnisData)
+    def getOnlineUrls(self):
+        """Fetch Online playlist from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_online.json"
+        self.callUrl(url, self.parseOnlineData)
 
-    def parseAnisData(self, data):
-        """Parse Anis JSON data from GitHub"""
+    def parseOnlineData(self, data):
+        """Parse Online JSON data from GitHub"""
         try:
             if isinstance(data, bytes):
                 data = data.decode('utf-8')
@@ -2167,13 +2167,13 @@ class IPStreamerScreen(Screen):
             else:
                 self["list"].hide()
                 self.radioList = []
-                self['server'].setText('Anis Sport - Playlist is empty')
+                self['server'].setText('Online Sport - Playlist is empty')
         except Exception as e:
-            cprint("[IPStreamer] Error parsing Anis data: {}".format(str(e)))
+            cprint("[IPStreamer] Error parsing Online data: {}".format(str(e)))
             trace_error()
             self["list"].hide()
             self.radioList = []
-            self['server'].setText('Error loading Anis Sport')
+            self['server'].setText('Error loading Online Sport')
 
     def addErrback(self, error=None):
         pass
@@ -2200,8 +2200,8 @@ class IPStreamerScreen(Screen):
         current = self.choices[self.plIndex]
         
         if current in self.hosts:
-            if current in ["Anis Sport"]:
-                self.getAnisUrls()
+            if current in ["Online Sport"]:
+                self.getOnlineUrls()
                 self['server'].setText(str(current))
             else:
                 list = []
@@ -2784,7 +2784,7 @@ class IPStreamerScreenGrid(Screen):
     def loadFrame(self):
         """Load selection frame image based on skin color"""
         # Get frame path based on selected color
-        color = config.plugins.IPStreamer.skin.value  # orange, teal, lime or blue
+        color = config.plugins.IPStreamer.skin.value  # orange, teal, or lime
         frame_path = '/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/frame_{}.png'.format(color)
         
         if fileExists(frame_path):
@@ -3373,8 +3373,8 @@ class IPStreamerScreenGrid(Screen):
         current = self.choices[self.plIndex]
         
         if current in self.hosts:
-            if current in ["Anis Sport"]:
-                self.getAnisUrls()
+            if current in ["Online Sport"]:
+                self.getOnlineUrls()
                 self['server'].setText(str(current))
             else:
                 list = []
@@ -3880,13 +3880,13 @@ class IPStreamerScreenGrid(Screen):
         cprint("[IPStreamer] Restoring service")
         self.session.nav.playService(self.lastservice)
     
-    def getAnisUrls(self):
-        """Fetch Anis playlist from GitHub"""
-        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_anis.json"
-        self.callUrl(url, self.parseAnisData)
+    def getOnlineUrls(self):
+        """Fetch Online playlist from GitHub"""
+        url = "https://raw.githubusercontent.com/popking159/ipstreamer/refs/heads/main/ipstreamer_online.json"
+        self.callUrl(url, self.parseOnlineData)
     
-    def parseAnisData(self, data):
-        """Parse Anis JSON data from GitHub"""
+    def parseOnlineData(self, data):
+        """Parse Online JSON data from GitHub"""
         try:
             if isinstance(data, bytes):
                 data = data.decode('utf-8')
@@ -3901,17 +3901,17 @@ class IPStreamerScreenGrid(Screen):
             
             if len(list) > 0:
                 self.radioList = list
-                self['server'].setText('Anis Sport')
+                self['server'].setText('Online Sport')
                 self.index = 0
                 self.page = 0
                 self.updateGrid()
             else:
                 self.radioList = []
-                self['server'].setText('Anis Sport - Playlist is empty')
+                self['server'].setText('Online Sport - Playlist is empty')
         except Exception as e:
-            cprint("[IPStreamer] Error parsing Anis data: {}".format(str(e)))
+            cprint("[IPStreamer] Error parsing Online data: {}".format(str(e)))
             self.radioList = []
-            self['server'].setText('Error loading Anis Sport')
+            self['server'].setText('Error loading Online Sport')
 
     def installupdate(self, answer=False):
         """Install update from GitHub"""
@@ -4243,7 +4243,7 @@ class IPStreamerHelp(Screen):
     • Updates/EPG Timezone/Credentials
 
     WEB INTERFACE
-    • URL: http://box-ip:8080/ipstreamer
+    • URL: http://box-ip:6688/ipstreamer
     • Mobile-friendly drag & drop
     • Add/Edit/Delete channels
     • Unlimited categories (separate JSON files)
@@ -4293,96 +4293,6 @@ class IPStreamerHandler(Screen):
             iPlayableService.evStopped: self.evEnd,
             iPlayableService.evStart: self.evServiceChanged,  # Detects channel change
         })
-
-    # --- PATCH: crash-safe service restore (debounced, deferred) ---
-
-    def _ensureRestoreTimer(self):
-        from enigma import eTimer
-        if getattr(self, "_restoreTimer", None) is None:
-            self._restoreTimer = eTimer()
-            try:
-                self._restoreTimer.callback.append(self._restoreTimerRouter)
-            except Exception:
-                self._restoreTimer_conn = self._restoreTimer.timeout.connect(self._restoreTimerRouter)
-
-    def _restoreTimerRouter(self):
-        # route between stage1 and stage2
-        if getattr(self, "_restoreStage", 0) == 0:
-            self._restoreStage = 1
-            self._doDeferredRestore()
-        else:
-            self._restoreStage = 0
-            self._doDeferredRestore2()
-
-    def _scheduleSafeRestore(self, reason=""):
-        # Debounce: prevent multiple restarts during a zap storm
-        if getattr(self, "_restoreInProgress", False):
-            return
-
-        self._restoreInProgress = True
-        self._ensureRestoreTimer()
-
-        # Capture the service we *intend* to restore (may change during zap)
-        try:
-            self._restoreServiceRef = self.session.nav.getCurrentlyPlayingServiceReference()
-        except Exception:
-            self._restoreServiceRef = None
-
-        # Give Enigma2 time to finish tearing down/setting up DVB service
-        # 100ms is often too low on some boxes/images -> use 600ms
-        self._restoreTimer.start(600, True)
-
-    def _doDeferredRestore(self):
-        # Always clear flag first to avoid deadlock if something throws
-        self._restoreInProgress = False
-
-        # Stop timers that might still fire while we touch nav/service
-        try:
-            if getattr(self, "statusTimer", None) and self.statusTimer.isActive():
-                self.statusTimer.stop()
-        except Exception:
-            pass
-        try:
-            if getattr(self, "bitrateCheckTimer", None) and self.bitrateCheckTimer.isActive():
-                self.bitrateCheckTimer.stop()
-        except Exception:
-            pass
-
-        # Only restore if the stored ref is still sane
-        serviceref = getattr(self, "_restoreServiceRef", None)
-        if not serviceref:
-            return
-
-        # If user already zapped again, skip restoring old ref
-        try:
-            current = self.session.nav.getCurrentlyPlayingServiceReference()
-            if current and current.toString() != serviceref.toString():
-                return
-        except Exception:
-            # If comparison fails, be conservative: don't touch nav
-            return
-
-        # Avoid stopService() from inside event callback context;
-        # at this point we are in timer context, safer.
-        try:
-            self.session.nav.stopService()
-        except Exception:
-            pass
-
-        # Restart service after a little more delay
-        self._ensureRestoreTimer()
-        self._restoreServiceRef2 = serviceref
-        self._restoreTimer.start(400, True)
-
-    def _doDeferredRestore2(self):
-        # second stage playService
-        serviceref = getattr(self, "_restoreServiceRef2", None)
-        if not serviceref:
-            return
-        try:
-            self.session.nav.playService(serviceref)
-        except Exception:
-            pass
     
     def stopIPStreamer(self):
         """Stop IPStreamer playback"""
@@ -4391,17 +4301,8 @@ class IPStreamerHandler(Screen):
             self.container.kill()
     
     def evServiceChanged(self):
-        # Called when service changes (zap) - restore audio/video safely
+        """Called when service changes (channel zap) - restore audio AND video"""
         cprint("[IPStreamer] Service changed - stopping external audio and restoring original")
-
-        # Stop external audio FIRST (kill ffmpeg/gst/container), but do NOT touch nav here
-        try:
-            self.stopIPStreamer()
-        except Exception:
-            pass
-
-        # Defer any nav stop/play to timer context to avoid Enigma2 race/segfault
-        self._scheduleSafeRestore("zap")
         
         # Stop external audio when user changes channel
         if config.plugins.IPStreamer.running.value:

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # IPStreamer Installer - Clean upgrade path
-version="1.10"
+version="1.20"
 ipkurl="https://github.com/popking159/ipstreamer/releases/download/IPStreamer/enigma2-plugin-extensions-ipstreamer_${version}_all.ipk"
 
 echo ""

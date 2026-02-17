@@ -1,5 +1,5 @@
 # =====================================================
-#   IPStreamer v1.10   |   Developed by Ziko
+#   IPStreamer v1.20   |   Developed by Ziko
 #                   |   Maintained by MNASR
 # =====================================================
 
@@ -70,6 +70,7 @@ from Plugins.Extensions.IPStreamer.ffmpeg_wrapper import build_ffmpeg_cmd
 from Plugins.Extensions.IPStreamer.gst_wrapper import build_gst_cmd
 from .skin import *
 
+WEBIF_PORT = 9898
 
 PY3 = version_info[0] == 3
 
@@ -181,6 +182,7 @@ config.plugins.IPStreamer.epgSource = ConfigSelection(
         ("local", _("Local XML file"))
     ]
 )
+config.plugins.IPStreamer.port = ConfigInteger(default=6688, limits=(1, 9999))
 config.plugins.IPStreamer.orange_user = ConfigText(default="", fixed_size=False)
 config.plugins.IPStreamer.orange_pass = ConfigText(default="", fixed_size=False)
 config.plugins.IPStreamer.satfamily_user = ConfigText(default="", fixed_size=False)
@@ -1205,6 +1207,7 @@ class IPStreamerSetup(Screen, ConfigListScreen):
         self.list.append(getConfigListEntry(_("Select Your IPStreamer Skin"), config.plugins.IPStreamer.skin))
         self.list.append(getConfigListEntry(_("EPG Source:"), config.plugins.IPStreamer.epgSource))
         self.list.append(getConfigListEntry(_("EPG Time Zone (base UTC+03:00)"), config.plugins.IPStreamer.epgOffset))
+        self.list.append(getConfigListEntry(_("Port number:"), config.plugins.IPStreamer.port)),
         self.list.append(getConfigListEntry(_("Orange username"), config.plugins.IPStreamer.orange_user))
         self.list.append(getConfigListEntry(_("Orange password"), config.plugins.IPStreamer.orange_pass))
         self.list.append(getConfigListEntry(_("SatFamily username"), config.plugins.IPStreamer.satfamily_user))

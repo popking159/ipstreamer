@@ -797,17 +797,19 @@ def startWebInterface():
     try:
         from twisted.internet import reactor
         
+        port = config.plugins.IPStreamer.port.value        
         root = resource.Resource()
         root.putChild(b"ipstreamer", IPStreamerWebInterface())
         _webif_root = root
         
         site = server.Site(root)
-        reactor.listenTCP(6688, site, interface='0.0.0.0')
+        reactor.listenTCP(port, site, interface='0.0.0.0')
         
-        print("[IPStreamer WebIF] Started on http://0.0.0.0:6688/ipstreamer")
+        # Fixed the print statement using an f-string
+        print(f"[IPStreamer WebIF] Started on http://0.0.0.0:{port}/ipstreamer")
         return True
     except Exception as e:
-        print("[IPStreamer WebIF] Error: {}".format(e))
+        print(f"[IPStreamer WebIF] Error: {e}")
         import traceback
         traceback.print_exc()
         return False

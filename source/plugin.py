@@ -1,5 +1,5 @@
 # =====================================================
-#   IPStreamer v1.20   |   Developed by Ziko
+#   IPStreamer v1.30   |   Developed by Ziko
 #                   |   Maintained by MNASR
 # =====================================================
 
@@ -365,7 +365,7 @@ def getPlaylist(category_file=None):
 def getversioninfo():
     """Read version from version file"""
     import os
-    currversion = "1.0"
+    currversion = "1.30"
     versionfile = "/usr/lib/enigma2/python/Plugins/Extensions/IPStreamer/version"
     
     if os.path.exists(versionfile):
@@ -1415,6 +1415,8 @@ class IPStreamerScreen(Screen):
                 "audioDelayReset": self.audioDelayReset,
                 "audioDelayUp": self.audioDelayUp,
                 "clearVideoDelay": self.clearVideoDelay,
+                "nextBouquet": self.nextPlaylist,
+                "prevBouquet": self.prevPlaylist,
                 "fetchEPG": self.fetchEPG,  # new
             }, -1)
         
@@ -2170,23 +2172,51 @@ class IPStreamerScreen(Screen):
             else:
                 self["list"].hide()
                 self.radioList = []
-                self['server'].setText('Online Sport - Playlist is empty')
+                self['server'].setText('Online - Playlist is empty')
         except Exception as e:
             cprint("[IPStreamer] Error parsing Online data: {}".format(str(e)))
             trace_error()
             self["list"].hide()
             self.radioList = []
-            self['server'].setText('Error loading Online Sport')
+            self['server'].setText('Error loading Online')
 
     def addErrback(self, error=None):
         pass
 
     def right(self):
+        """Switch to next playlist (Channel Up button)"""
         self.plIndex += 1
+        if self.plIndex >= len(self.choices):
+            self.plIndex = 0
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
         self.changePlaylist()
 
     def left(self):
+        """Switch to previous playlist (Channel Down button)"""
         self.plIndex -= 1
+        if self.plIndex < 0:
+            self.plIndex = len(self.choices) - 1
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
+        self.changePlaylist()
+
+    def nextPlaylist(self):
+        """Switch to next playlist (Channel Up button)"""
+        self.plIndex += 1
+        if self.plIndex >= len(self.choices):
+            self.plIndex = 0
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
+        self.changePlaylist()
+
+    def prevPlaylist(self):
+        """Switch to previous playlist (Channel Down button)"""
+        self.plIndex -= 1
+        if self.plIndex < 0:
+            self.plIndex = len(self.choices) - 1
+        
+        cprint("[IPStreamer] Switching to playlist: {}".format(self.choices[self.plIndex]))
         self.changePlaylist()
 
     def changePlaylist(self):
@@ -2203,7 +2233,7 @@ class IPStreamerScreen(Screen):
         current = self.choices[self.plIndex]
         
         if current in self.hosts:
-            if current in ["Online Sport"]:
+            if current in ["Online"]:
                 self.getOnlineUrls()
                 self['server'].setText(str(current))
             else:
@@ -3376,7 +3406,7 @@ class IPStreamerScreenGrid(Screen):
         current = self.choices[self.plIndex]
         
         if current in self.hosts:
-            if current in ["Online Sport"]:
+            if current in ["Online"]:
                 self.getOnlineUrls()
                 self['server'].setText(str(current))
             else:
@@ -3893,8 +3923,10 @@ class IPStreamerScreenGrid(Screen):
         try:
             if isinstance(data, bytes):
                 data = data.decode('utf-8')
+            
             playlist_data = json.loads(data)
             list = []
+
             if 'playlist' in playlist_data:
                 for channel in playlist_data['playlist']:
                     try:
@@ -3904,17 +3936,17 @@ class IPStreamerScreenGrid(Screen):
             
             if len(list) > 0:
                 self.radioList = list
-                self['server'].setText('Online Sport')
+                self['server'].setText('Online')
                 self.index = 0
                 self.page = 0
                 self.updateGrid()
             else:
                 self.radioList = []
-                self['server'].setText('Online Sport - Playlist is empty')
+                self['server'].setText('Online - Playlist is empty')
         except Exception as e:
             cprint("[IPStreamer] Error parsing Online data: {}".format(str(e)))
             self.radioList = []
-            self['server'].setText('Error loading Online Sport')
+            self['server'].setText('Error loading Online')
 
     def installupdate(self, answer=False):
         """Install update from GitHub"""
@@ -4399,7 +4431,7 @@ class IPStreamerLauncher():
 
 def sessionstart(reason, session=None, **kwargs):
     if reason == 0:
-        IPStreamerHandler(session)
+        #IPStreamerHandler(session)
         IPStreamerLauncher(session).gotSession()
         
         # Start web interface

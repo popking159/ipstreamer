@@ -61,7 +61,6 @@ gstreamer1.0-plugins-ugly-cdio
 gstreamer1.0-plugins-ugly-dvdsub
 gstreamer1.0-plugins-base-volume
 gstreamer1.0-plugins-bad-audiovisualizers
-gstreamer1.0-plugins-good-pulseaudio
 gstreamer1.0-plugins-good-equalizer"
 # =========================================================================
 

@@ -1,8 +1,40 @@
 {
     "playlist": [
         {
-            "channel": "anis1",
-            "url": "http://anisfm.pp.ua/1"
+            "channel": "Fox Sport 1",
+            "url": "http://foxfm.xyz/1"
+        },
+        {
+            "channel": "Fox Sport 2",
+            "url": "http://foxfm.xyz/2"
+        },
+        {
+            "channel": "Fox Sport 3",
+            "url": "http://foxfm.xyz/3"
+        },
+        {
+            "channel": "Fox Sport 4",
+            "url": "http://foxfm.xyz/4"
+        },
+        {
+            "channel": "Fox Sport 5",
+            "url": "http://foxfm.xyz/5"
+        },
+        {
+            "channel": "Fox Sport 6",
+            "url": "http://foxfm.xyz/6"
+        },
+        {
+            "channel": "Fox Sport 7",
+            "url": "http://foxfm.xyz/7"
+        },
+        {
+            "channel": "Fox Sport 8",
+            "url": "http://foxfm.xyz/8"
+        },
+        {
+            "channel": "Fox Sport 9",
+            "url": "http://foxfm.xyz/9"
         }
     ]
 }
